@@ -1,11 +1,13 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:drift/drift.dart'; // equals(), &, etc.
+import 'package:drift/drift.dart';
 
-import '../db/app_database.dart';
-import '../db/daos/transaction_dao.dart';
-import '../../main.dart';
-import '../../domain/services/prediction_service.dart';
-import '../../core/state/filters.dart';
+import 'package:tesis/data/db/app_database.dart';
+import 'package:tesis/data/db/daos/transaction_dao.dart';
+import 'package:tesis/main.dart';
+import 'package:tesis/domain/services/prediction_service.dart';
+import 'package:tesis/core/state/filters.dart';
+import '../../core/state/db_providers.dart';
+
 
 /// ------------------------------
 /// DAO Provider
@@ -199,17 +201,16 @@ class _MonthlySummary {
 /// ------------------------------
 /// Últimos movimientos filtrados por el mes seleccionado
 /// ------------------------------
-final latestByMonthProvider = StreamProvider<List<(Transaction, Category)>>((
+final latestByMonthProvider = Provider<AsyncValue<List<(Transaction, Category)>>>((
   ref,
-) async* {
-  final baseStream = ref.watch(latestTransactionsProvider.stream);
+) {
+  final transactionsAsync = ref.watch(latestTransactionsProvider);
   final sel = ref.watch(selectedMonthProvider);
   final y = sel.year, m = sel.month;
 
-  await for (final rows in baseStream) {
-    final filtered = rows
+  return transactionsAsync.whenData((rows) {
+    return rows
         .where((e) => e.$1.date.year == y && e.$1.date.month == m)
         .toList();
-    yield filtered;
-  }
+  });
 });

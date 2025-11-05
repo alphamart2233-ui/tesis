@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:drift/drift.dart' hide Column;
-import '../../main.dart';
+import 'package:drift/drift.dart' show Value; // para Value(...)
+import '../../core/state/db_providers.dart';
 import '../../data/db/app_database.dart';
 
 class BudgetsScreen extends ConsumerStatefulWidget {
@@ -39,6 +39,7 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
                 context: context,
                 builder: (_) => _MonthPickerDialog(year: _year, month: _month),
               );
+              if (!mounted) return;
               if (picked != null) {
                 setState(() {
                   _year = picked.$1;
@@ -53,8 +54,8 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
         tooltip: 'Agregar/Editar presupuesto',
         onPressed: () async {
           final cats = await db.select(db.categories).get();
+          if (!mounted) return;
           if (cats.isEmpty) {
-            if (!mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('Primero crea categorías.')),
             );
@@ -65,47 +66,44 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
             builder: (_) => _BudgetDialog(
               year: _year,
               month: _month,
-              categories: cats
-                  .where((c) => c.type == 'expense')
-                  .toList(), // presupuesto solo para gastos
+              categories: cats.where((c) => c.type == 'expense').toList(),
             ),
           );
+          if (!mounted) return;
           if (result != null) {
-            // upsert sencillo: si existe presupuesto para (cat, año, mes) -> update; si no -> insert
-            final existing =
-                await (db.select(db.budgets)..where(
-                      (b) =>
-                          b.categoryId.equals(result.categoryId) &
-                          b.year.equals(_year) &
-                          b.month.equals(_month),
-                    ))
-                    .getSingleOrNull();
+            // upsert por (cat, año, mes)
+            final existing = await (db.select(db.budgets)
+              ..where((b) => b.categoryId.equals(result.categoryId))
+              ..where((b) => b.year.equals(_year))
+              ..where((b) => b.month.equals(_month)))
+                .getSingleOrNull();
+
             if (existing == null) {
-              await db
-                  .into(db.budgets)
-                  .insert(
-                    BudgetsCompanion.insert(
-                      categoryId: result.categoryId,
-                      year: _year,
-                      month: _month,
-                      limit: result.limit,
-                    ),
-                  );
+              await db.into(db.budgets).insert(
+                BudgetsCompanion.insert(
+                  categoryId: result.categoryId,
+                  year: _year,
+                  month: _month,
+                  limit: result.limit,
+                ),
+              );
             } else {
-              await (db.update(db.budgets)
-                    ..where((b) => b.id.equals(existing.id)))
+              await (db.update(db.budgets)..where((b) => b.id.equals(existing.id)))
                   .write(BudgetsCompanion(limit: Value(result.limit)));
             }
+            if (!mounted) return;
+            setState(() {}); // refrescar
           }
         },
         child: const Icon(Icons.add),
       ),
       body: FutureBuilder(
-        future: Future.wait([
+        future: Future.wait<List<Object?>>([
           db.select(db.categories).get(),
-          (db.select(
-            db.budgets,
-          )..where((b) => b.year.equals(_year) & b.month.equals(_month))).get(),
+          (db.select(db.budgets)
+            ..where((b) => b.year.equals(_year))
+            ..where((b) => b.month.equals(_month)))
+              .get(),
         ]),
         builder: (context, snapshot) {
           if (!snapshot.hasData) {
@@ -121,9 +119,7 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
 
           if (expenseCats.isEmpty) {
             return const Center(
-              child: Text(
-                'No hay categorías de gasto. Crea una en Categorías.',
-              ),
+              child: Text('No hay categorías de gasto. Crea una en Categorías.'),
             );
           }
 
@@ -136,6 +132,7 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
             itemBuilder: (context, i) {
               final cat = items[i].value;
               final b = byCat[cat.id];
+
               return ListTile(
                 title: Text(cat.name),
                 subtitle: Text('$_year-${_month.toString().padLeft(2, '0')}'),
@@ -151,29 +148,25 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
                       initialCategoryId: cat.id,
                     ),
                   );
+                  if (!mounted) return;
                   if (result != null) {
-                    final existing =
-                        await (db.select(db.budgets)..where(
-                              (bb) =>
-                                  bb.categoryId.equals(result.categoryId) &
-                                  bb.year.equals(_year) &
-                                  bb.month.equals(_month),
-                            ))
-                            .getSingleOrNull();
+                    final existing = await (db.select(db.budgets)
+                      ..where((bb) => bb.categoryId.equals(result.categoryId))
+                      ..where((bb) => bb.year.equals(_year))
+                      ..where((bb) => bb.month.equals(_month)))
+                        .getSingleOrNull();
+
                     if (existing == null) {
-                      await db
-                          .into(db.budgets)
-                          .insert(
-                            BudgetsCompanion.insert(
-                              categoryId: result.categoryId,
-                              year: _year,
-                              month: _month,
-                              limit: result.limit,
-                            ),
-                          );
+                      await db.into(db.budgets).insert(
+                        BudgetsCompanion.insert(
+                          categoryId: result.categoryId,
+                          year: _year,
+                          month: _month,
+                          limit: result.limit,
+                        ),
+                      );
                     } else {
-                      await (db.update(db.budgets)
-                            ..where((bb) => bb.id.equals(existing.id)))
+                      await (db.update(db.budgets)..where((bb) => bb.id.equals(existing.id)))
                           .write(BudgetsCompanion(limit: Value(result.limit)));
                     }
                     if (!mounted) return;
@@ -183,37 +176,33 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
                 onLongPress: b == null
                     ? null
                     : () async {
-                        final ok =
-                            await showDialog<bool>(
-                              context: context,
-                              builder: (_) => AlertDialog(
-                                title: const Text('Eliminar presupuesto'),
-                                content: Text(
-                                  '¿Quitar presupuesto de "${cat.name}" para $_year-${_month.toString().padLeft(2, '0')}?',
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.pop(context, false),
-                                    child: const Text('Cancelar'),
-                                  ),
-                                  TextButton(
-                                    onPressed: () =>
-                                        Navigator.pop(context, true),
-                                    child: const Text('Eliminar'),
-                                  ),
-                                ],
-                              ),
-                            ) ??
-                            false;
-                        if (ok) {
-                          await (db.delete(
-                            db.budgets,
-                          )..where((bb) => bb.id.equals(b!.id))).go();
-                          if (!mounted) return;
-                          setState(() {});
-                        }
-                      },
+                  final ok = await showDialog<bool>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: const Text('Eliminar presupuesto'),
+                      content: Text(
+                        '¿Quitar presupuesto de "${cat.name}" para '
+                            '$_year-${_month.toString().padLeft(2, '0')}?',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Cancelar'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: const Text('Eliminar'),
+                        ),
+                      ],
+                    ),
+                  ) ??
+                      false;
+                  if (ok) {
+                    await (db.delete(db.budgets)..where((bb) => bb.id.equals(b.id))).go();
+                    if (!mounted) return;
+                    setState(() {});
+                  }
+                },
               );
             },
           );
@@ -255,8 +244,7 @@ class _BudgetDialogState extends State<_BudgetDialog> {
   @override
   void initState() {
     super.initState();
-    _catId =
-        widget.initialCategoryId ??
+    _catId = widget.initialCategoryId ??
         (widget.categories.isNotEmpty ? widget.categories.first.id : null);
     if (widget.initial != null) {
       _limitCtrl.text = widget.initial!.toStringAsFixed(2);
@@ -275,7 +263,6 @@ class _BudgetDialogState extends State<_BudgetDialog> {
       title: Text(
         'Presupuesto ${widget.year}-${widget.month.toString().padLeft(2, '0')}',
       ),
-
       content: Form(
         key: _formKey,
         child: Column(
@@ -284,9 +271,7 @@ class _BudgetDialogState extends State<_BudgetDialog> {
             DropdownButtonFormField<int>(
               value: _catId,
               items: widget.categories
-                  .map(
-                    (c) => DropdownMenuItem(value: c.id, child: Text(c.name)),
-                  )
+                  .map((c) => DropdownMenuItem(value: c.id, child: Text(c.name)))
                   .toList(),
               onChanged: (v) => setState(() => _catId = v),
               decoration: const InputDecoration(labelText: 'Categoría (gasto)'),
@@ -353,8 +338,16 @@ class _MonthPickerDialogState extends State<_MonthPickerDialog> {
         children: [
           IconButton(
             icon: const Icon(Icons.chevron_left),
-            onPressed: () =>
-                setState(() => _month == 1 ? {_month = 12, _year--} : _month--),
+            onPressed: () {
+              setState(() {
+                if (_month == 1) {
+                  _month = 12;
+                  _year--;
+                } else {
+                  _month--;
+                }
+              });
+            },
           ),
           Expanded(
             child: Center(
@@ -366,8 +359,16 @@ class _MonthPickerDialogState extends State<_MonthPickerDialog> {
           ),
           IconButton(
             icon: const Icon(Icons.chevron_right),
-            onPressed: () =>
-                setState(() => _month == 12 ? {_month = 1, _year++} : _month++),
+            onPressed: () {
+              setState(() {
+                if (_month == 12) {
+                  _month = 1;
+                  _year++;
+                } else {
+                  _month++;
+                }
+              });
+            },
           ),
         ],
       ),

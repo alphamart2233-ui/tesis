@@ -1,8 +1,10 @@
+// lib/presentation/transactions/add_transaction_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // FilteringTextInputFormatter
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart' show Value;
 
-import '../../main.dart';
+import '../../core/state/db_providers.dart';
 import '../../data/db/app_database.dart';
 
 class AddTransactionScreen extends ConsumerStatefulWidget {
@@ -20,13 +22,6 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
   int? categoryId;
   DateTime date = DateTime.now();
   String? note;
-
-  @override
-  void initState() {
-    super.initState();
-    // Semilla de categorías por si es la primera vez
-    Future.microtask(() => ref.read(databaseProvider).seed());
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,13 +42,25 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
                 children: [
                   // Monto
                   TextFormField(
-                    decoration: const InputDecoration(labelText: 'Monto'),
-                    keyboardType: TextInputType.number,
-                    validator: (v) => (v == null || v.trim().isEmpty)
-                        ? 'Ingresa un monto'
-                        : null,
-                    onSaved: (v) =>
-                        amount = double.tryParse(v!.replaceAll(',', '.')),
+                    decoration: const InputDecoration(
+                      labelText: 'Monto',
+                      hintText: 'Ej: 20.50',
+                      prefixIcon: Icon(Icons.attach_money),
+                      border: OutlineInputBorder(),
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                      signed: true,
+                    ),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(
+                        RegExp(r'[-0-9.,]'),
+                      ),
+                    ],
+                    validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Ingresa un monto' : null,
+                    onSaved: (v) => amount =
+                        double.tryParse(v!.trim().replaceAll(',', '.')),
                   ),
                   const SizedBox(height: 12),
 
@@ -63,14 +70,17 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
                     items: cats
                         .map(
                           (c) => DropdownMenuItem(
-                            value: c.id,
-                            child: Text('${c.name} (${c.type})'),
-                          ),
-                        )
+                        value: c.id,
+                        child: Text('${c.name} (${c.type})'),
+                      ),
+                    )
                         .toList(),
                     onChanged: (v) => setState(() => categoryId = v),
                     validator: (v) => v == null ? 'Selecciona categoría' : null,
-                    decoration: const InputDecoration(labelText: 'Categoría'),
+                    decoration: const InputDecoration(
+                      labelText: 'Categoría',
+                      border: OutlineInputBorder(),
+                    ),
                   ),
                   const SizedBox(height: 12),
 
@@ -78,6 +88,8 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
                   TextFormField(
                     decoration: const InputDecoration(
                       labelText: 'Nota (opcional)',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.notes),
                     ),
                     onSaved: (v) => note = v?.trim().isEmpty == true ? null : v,
                   ),
@@ -112,26 +124,46 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
                   const SizedBox(height: 20),
 
                   // Guardar
-                  ElevatedButton(
-                    onPressed: () async {
-                      if (_formKey.currentState!.validate()) {
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.check),
+                      label: const Text('Guardar'),
+                      onPressed: () async {
+                        if (!_formKey.currentState!.validate()) return;
+
                         _formKey.currentState!.save();
+                        if (categoryId == null || amount == null) return;
 
-                        await db
-                            .into(db.transactions)
-                            .insert(
-                              TransactionsCompanion.insert(
-                                amount: amount!,
-                                categoryId: categoryId!,
-                                date: date,
-                                note: Value(note),
-                              ),
-                            );
+                        // Leemos la categoría para normalizar signo
+                        final selectedCategory = await (db.select(db.categories)
+                          ..where((c) => c.id.equals(categoryId!)))
+                            .getSingle();
 
-                        if (context.mounted) Navigator.of(context).pop();
-                      }
-                    },
-                    child: const Text('Guardar'),
+                        final double finalAmount;
+                        if (selectedCategory.type == 'expense') {
+                          finalAmount = -amount!.abs();
+                        } else {
+                          finalAmount = amount!.abs();
+                        }
+
+                        await db.into(db.transactions).insert(
+                          TransactionsCompanion.insert(
+                            amount: finalAmount,
+                            categoryId: categoryId!,
+                            date: DateTime(
+                              date.year,
+                              date.month,
+                              date.day,
+                            ),
+                            note: Value(note),
+                          ),
+                        );
+
+                        if (!mounted) return;
+                        Navigator.of(context).pop();
+                      },
+                    ),
                   ),
                 ],
               ),
