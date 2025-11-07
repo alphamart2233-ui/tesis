@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "5169050914",
+    "project_id": "fintrack-ec-2025",
+    "storage_bucket": "fintrack-ec-2025.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:5169050914:android:6145a9f825a40942f3e17b",
+        "android_client_info": {
+          "package_name": "com.example.tesis_1"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHhuErMbuP4kj7h9dNI3exw5UB0HpXE-s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
