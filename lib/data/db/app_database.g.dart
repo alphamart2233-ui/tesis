@@ -28,6 +28,11 @@ class $CategoriesTable extends Categories
   late final GeneratedColumn<String> type = GeneratedColumn<String>(
       'type', aliasedName, false,
       type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _iconMeta = const VerificationMeta('icon');
+  @override
+  late final GeneratedColumn<String> icon = GeneratedColumn<String>(
+      'icon', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _remoteIdMeta =
       const VerificationMeta('remoteId');
   @override
@@ -64,7 +69,7 @@ class $CategoriesTable extends Categories
       defaultValue: const Constant(true));
   @override
   List<GeneratedColumn> get $columns =>
-      [id, name, type, remoteId, updatedAt, isDeleted, isDirty];
+      [id, name, type, icon, remoteId, updatedAt, isDeleted, isDirty];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -89,6 +94,10 @@ class $CategoriesTable extends Categories
           _typeMeta, type.isAcceptableOrUnknown(data['type']!, _typeMeta));
     } else if (isInserting) {
       context.missing(_typeMeta);
+    }
+    if (data.containsKey('icon')) {
+      context.handle(
+          _iconMeta, icon.isAcceptableOrUnknown(data['icon']!, _iconMeta));
     }
     if (data.containsKey('remote_id')) {
       context.handle(_remoteIdMeta,
@@ -121,6 +130,8 @@ class $CategoriesTable extends Categories
           .read(DriftSqlType.string, data['${effectivePrefix}name'])!,
       type: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}type'])!,
+      icon: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}icon']),
       remoteId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}remote_id']),
       updatedAt: attachedDatabase.typeMapping
@@ -142,6 +153,7 @@ class Category extends DataClass implements Insertable<Category> {
   final int id;
   final String name;
   final String type;
+  final String? icon;
   final String? remoteId;
   final int updatedAt;
   final bool isDeleted;
@@ -150,6 +162,7 @@ class Category extends DataClass implements Insertable<Category> {
       {required this.id,
       required this.name,
       required this.type,
+      this.icon,
       this.remoteId,
       required this.updatedAt,
       required this.isDeleted,
@@ -160,6 +173,9 @@ class Category extends DataClass implements Insertable<Category> {
     map['id'] = Variable<int>(id);
     map['name'] = Variable<String>(name);
     map['type'] = Variable<String>(type);
+    if (!nullToAbsent || icon != null) {
+      map['icon'] = Variable<String>(icon);
+    }
     if (!nullToAbsent || remoteId != null) {
       map['remote_id'] = Variable<String>(remoteId);
     }
@@ -174,6 +190,7 @@ class Category extends DataClass implements Insertable<Category> {
       id: Value(id),
       name: Value(name),
       type: Value(type),
+      icon: icon == null && nullToAbsent ? const Value.absent() : Value(icon),
       remoteId: remoteId == null && nullToAbsent
           ? const Value.absent()
           : Value(remoteId),
@@ -190,6 +207,7 @@ class Category extends DataClass implements Insertable<Category> {
       id: serializer.fromJson<int>(json['id']),
       name: serializer.fromJson<String>(json['name']),
       type: serializer.fromJson<String>(json['type']),
+      icon: serializer.fromJson<String?>(json['icon']),
       remoteId: serializer.fromJson<String?>(json['remoteId']),
       updatedAt: serializer.fromJson<int>(json['updatedAt']),
       isDeleted: serializer.fromJson<bool>(json['isDeleted']),
@@ -203,6 +221,7 @@ class Category extends DataClass implements Insertable<Category> {
       'id': serializer.toJson<int>(id),
       'name': serializer.toJson<String>(name),
       'type': serializer.toJson<String>(type),
+      'icon': serializer.toJson<String?>(icon),
       'remoteId': serializer.toJson<String?>(remoteId),
       'updatedAt': serializer.toJson<int>(updatedAt),
       'isDeleted': serializer.toJson<bool>(isDeleted),
@@ -214,6 +233,7 @@ class Category extends DataClass implements Insertable<Category> {
           {int? id,
           String? name,
           String? type,
+          Value<String?> icon = const Value.absent(),
           Value<String?> remoteId = const Value.absent(),
           int? updatedAt,
           bool? isDeleted,
@@ -222,6 +242,7 @@ class Category extends DataClass implements Insertable<Category> {
         id: id ?? this.id,
         name: name ?? this.name,
         type: type ?? this.type,
+        icon: icon.present ? icon.value : this.icon,
         remoteId: remoteId.present ? remoteId.value : this.remoteId,
         updatedAt: updatedAt ?? this.updatedAt,
         isDeleted: isDeleted ?? this.isDeleted,
@@ -232,6 +253,7 @@ class Category extends DataClass implements Insertable<Category> {
       id: data.id.present ? data.id.value : this.id,
       name: data.name.present ? data.name.value : this.name,
       type: data.type.present ? data.type.value : this.type,
+      icon: data.icon.present ? data.icon.value : this.icon,
       remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
       isDeleted: data.isDeleted.present ? data.isDeleted.value : this.isDeleted,
@@ -245,6 +267,7 @@ class Category extends DataClass implements Insertable<Category> {
           ..write('id: $id, ')
           ..write('name: $name, ')
           ..write('type: $type, ')
+          ..write('icon: $icon, ')
           ..write('remoteId: $remoteId, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('isDeleted: $isDeleted, ')
@@ -254,8 +277,8 @@ class Category extends DataClass implements Insertable<Category> {
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, name, type, remoteId, updatedAt, isDeleted, isDirty);
+  int get hashCode => Object.hash(
+      id, name, type, icon, remoteId, updatedAt, isDeleted, isDirty);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -263,6 +286,7 @@ class Category extends DataClass implements Insertable<Category> {
           other.id == this.id &&
           other.name == this.name &&
           other.type == this.type &&
+          other.icon == this.icon &&
           other.remoteId == this.remoteId &&
           other.updatedAt == this.updatedAt &&
           other.isDeleted == this.isDeleted &&
@@ -273,6 +297,7 @@ class CategoriesCompanion extends UpdateCompanion<Category> {
   final Value<int> id;
   final Value<String> name;
   final Value<String> type;
+  final Value<String?> icon;
   final Value<String?> remoteId;
   final Value<int> updatedAt;
   final Value<bool> isDeleted;
@@ -281,6 +306,7 @@ class CategoriesCompanion extends UpdateCompanion<Category> {
     this.id = const Value.absent(),
     this.name = const Value.absent(),
     this.type = const Value.absent(),
+    this.icon = const Value.absent(),
     this.remoteId = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.isDeleted = const Value.absent(),
@@ -290,6 +316,7 @@ class CategoriesCompanion extends UpdateCompanion<Category> {
     this.id = const Value.absent(),
     required String name,
     required String type,
+    this.icon = const Value.absent(),
     this.remoteId = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.isDeleted = const Value.absent(),
@@ -300,6 +327,7 @@ class CategoriesCompanion extends UpdateCompanion<Category> {
     Expression<int>? id,
     Expression<String>? name,
     Expression<String>? type,
+    Expression<String>? icon,
     Expression<String>? remoteId,
     Expression<int>? updatedAt,
     Expression<bool>? isDeleted,
@@ -309,6 +337,7 @@ class CategoriesCompanion extends UpdateCompanion<Category> {
       if (id != null) 'id': id,
       if (name != null) 'name': name,
       if (type != null) 'type': type,
+      if (icon != null) 'icon': icon,
       if (remoteId != null) 'remote_id': remoteId,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (isDeleted != null) 'is_deleted': isDeleted,
@@ -320,6 +349,7 @@ class CategoriesCompanion extends UpdateCompanion<Category> {
       {Value<int>? id,
       Value<String>? name,
       Value<String>? type,
+      Value<String?>? icon,
       Value<String?>? remoteId,
       Value<int>? updatedAt,
       Value<bool>? isDeleted,
@@ -328,6 +358,7 @@ class CategoriesCompanion extends UpdateCompanion<Category> {
       id: id ?? this.id,
       name: name ?? this.name,
       type: type ?? this.type,
+      icon: icon ?? this.icon,
       remoteId: remoteId ?? this.remoteId,
       updatedAt: updatedAt ?? this.updatedAt,
       isDeleted: isDeleted ?? this.isDeleted,
@@ -346,6 +377,9 @@ class CategoriesCompanion extends UpdateCompanion<Category> {
     }
     if (type.present) {
       map['type'] = Variable<String>(type.value);
+    }
+    if (icon.present) {
+      map['icon'] = Variable<String>(icon.value);
     }
     if (remoteId.present) {
       map['remote_id'] = Variable<String>(remoteId.value);
@@ -368,6 +402,7 @@ class CategoriesCompanion extends UpdateCompanion<Category> {
           ..write('id: $id, ')
           ..write('name: $name, ')
           ..write('type: $type, ')
+          ..write('icon: $icon, ')
           ..write('remoteId: $remoteId, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('isDeleted: $isDeleted, ')
@@ -1173,6 +1208,7 @@ typedef $$CategoriesTableCreateCompanionBuilder = CategoriesCompanion Function({
   Value<int> id,
   required String name,
   required String type,
+  Value<String?> icon,
   Value<String?> remoteId,
   Value<int> updatedAt,
   Value<bool> isDeleted,
@@ -1182,6 +1218,7 @@ typedef $$CategoriesTableUpdateCompanionBuilder = CategoriesCompanion Function({
   Value<int> id,
   Value<String> name,
   Value<String> type,
+  Value<String?> icon,
   Value<String?> remoteId,
   Value<int> updatedAt,
   Value<bool> isDeleted,
@@ -1240,6 +1277,9 @@ class $$CategoriesTableFilterComposer
 
   ColumnFilters<String> get type => $composableBuilder(
       column: $table.type, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get icon => $composableBuilder(
+      column: $table.icon, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<String> get remoteId => $composableBuilder(
       column: $table.remoteId, builder: (column) => ColumnFilters(column));
@@ -1314,6 +1354,9 @@ class $$CategoriesTableOrderingComposer
   ColumnOrderings<String> get type => $composableBuilder(
       column: $table.type, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get icon => $composableBuilder(
+      column: $table.icon, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<String> get remoteId => $composableBuilder(
       column: $table.remoteId, builder: (column) => ColumnOrderings(column));
 
@@ -1344,6 +1387,9 @@ class $$CategoriesTableAnnotationComposer
 
   GeneratedColumn<String> get type =>
       $composableBuilder(column: $table.type, builder: (column) => column);
+
+  GeneratedColumn<String> get icon =>
+      $composableBuilder(column: $table.icon, builder: (column) => column);
 
   GeneratedColumn<String> get remoteId =>
       $composableBuilder(column: $table.remoteId, builder: (column) => column);
@@ -1426,6 +1472,7 @@ class $$CategoriesTableTableManager extends RootTableManager<
             Value<int> id = const Value.absent(),
             Value<String> name = const Value.absent(),
             Value<String> type = const Value.absent(),
+            Value<String?> icon = const Value.absent(),
             Value<String?> remoteId = const Value.absent(),
             Value<int> updatedAt = const Value.absent(),
             Value<bool> isDeleted = const Value.absent(),
@@ -1435,6 +1482,7 @@ class $$CategoriesTableTableManager extends RootTableManager<
             id: id,
             name: name,
             type: type,
+            icon: icon,
             remoteId: remoteId,
             updatedAt: updatedAt,
             isDeleted: isDeleted,
@@ -1444,6 +1492,7 @@ class $$CategoriesTableTableManager extends RootTableManager<
             Value<int> id = const Value.absent(),
             required String name,
             required String type,
+            Value<String?> icon = const Value.absent(),
             Value<String?> remoteId = const Value.absent(),
             Value<int> updatedAt = const Value.absent(),
             Value<bool> isDeleted = const Value.absent(),
@@ -1453,6 +1502,7 @@ class $$CategoriesTableTableManager extends RootTableManager<
             id: id,
             name: name,
             type: type,
+            icon: icon,
             remoteId: remoteId,
             updatedAt: updatedAt,
             isDeleted: isDeleted,

@@ -1,3 +1,5 @@
+//lib/data/repositories/transaction_repository.dart
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart';
 
@@ -7,7 +9,6 @@ import 'package:tesis/main.dart';
 import 'package:tesis/domain/services/prediction_service.dart';
 import 'package:tesis/core/state/filters.dart';
 import '../../core/state/db_providers.dart';
-
 
 /// ------------------------------
 /// DAO Provider
@@ -21,10 +22,10 @@ final transactionDaoProvider = Provider<TransactionDao>((ref) {
 /// Últimos movimientos (stream general)
 /// ------------------------------
 final latestTransactionsProvider =
-    StreamProvider<List<(Transaction, Category)>>((ref) {
-      final dao = ref.watch(transactionDaoProvider);
-      return dao.watchLatest(limit: 50);
-    });
+StreamProvider<List<(Transaction, Category)>>((ref) {
+  final dao = ref.watch(transactionDaoProvider);
+  return dao.watchLatest(limit: 50);
+});
 
 /// ------------------------------
 /// Serie mensual para gráfico de gastos (6 meses terminando en el mes seleccionado)
@@ -35,9 +36,7 @@ class MonthlyPoint {
   MonthlyPoint(this.label, this.total);
 }
 
-final monthlyExpenseSeriesProvider = StreamProvider<List<MonthlyPoint>>((
-  ref,
-) async* {
+final monthlyExpenseSeriesProvider = StreamProvider<List<MonthlyPoint>>((ref) async* {
   final dao = ref.watch(transactionDaoProvider);
   final sel = ref.watch(selectedMonthProvider); // mes elegido (día 1)
 
@@ -63,9 +62,13 @@ final monthlyExpenseSeriesProvider = StreamProvider<List<MonthlyPoint>>((
         byMonth[key] = (byMonth[key] ?? 0) + tx.amount;
       }
     }
-    yield months
-        .map((k) => MonthlyPoint(k, byMonth[k]!))
-        .toList(); // 6 puntos exactos
+
+    final list = months.map((k) => MonthlyPoint(k, byMonth[k]!)).toList();
+
+    // 👇 Debug en consola
+    print('monthlyExpenseSeries: ${list.map((e) => '${e.label}: ${e.total}').join(', ')}');
+
+    yield list;
   }
 });
 
@@ -79,27 +82,27 @@ final predictionServiceProvider = Provider<PredictionService>((ref) {
 
 /// Devuelve [(nombreCategoria, estimado)] para el próximo mes (solo categorías de GASTO)
 final nextMonthExpenseEstimatesProvider =
-    FutureProvider<List<(String, double)>>((ref) async {
-      final db = ref.watch(databaseProvider);
-      final svc = ref.watch(predictionServiceProvider);
-      final estimates = await svc.estimateNextMonthByCategory();
+FutureProvider<List<(String, double)>>((ref) async {
+  final db = ref.watch(databaseProvider);
+  final svc = ref.watch(predictionServiceProvider);
+  final estimates = await svc.estimateNextMonthByCategory();
 
-      // Catálogo de categorías
-      final allCats = await db.select(db.categories).get();
-      final byId = {for (final c in allCats) c.id: c};
+  // Catálogo de categorías
+  final allCats = await db.select(db.categories).get();
+  final byId = {for (final c in allCats) c.id: c};
 
-      final result = <(String, double)>[];
-      estimates.forEach((catId, value) {
-        final cat = byId[catId];
-        if (cat == null) return;
-        if (cat.type != 'expense') return;
-        result.add((cat.name, value));
-      });
+  final result = <(String, double)>[];
+  estimates.forEach((catId, value) {
+    final cat = byId[catId];
+    if (cat == null) return;
+    if (cat.type != 'expense') return;
+    result.add((cat.name, value));
+  });
 
-      // Orden descendente por estimado
-      result.sort((a, b) => b.$2.compareTo(a.$2));
-      return result;
-    });
+  // Orden descendente por estimado
+  result.sort((a, b) => b.$2.compareTo(a.$2));
+  return result;
+});
 
 /// ------------------------------
 /// Alertas: estimado (próximo mes) > presupuesto (próximo mes)
@@ -171,9 +174,12 @@ final monthlySummaryProvider = StreamProvider<_MonthlySummary>((ref) async* {
       if (k != ymKey) continue;
       if (cat.type == 'income') {
         income += tx.amount;
+        // ...
       } else if (cat.type == 'expense') {
-        expense += tx.amount;
+        // ✅ CORRECCIÓN:
+        expense += -tx.amount; // Suma el valor positivo (ej: -(-161.50) = 161.50)
       }
+// ...
     }
     yield _MonthlySummary(
       year: sel.year,
@@ -202,8 +208,8 @@ class _MonthlySummary {
 /// Últimos movimientos filtrados por el mes seleccionado
 /// ------------------------------
 final latestByMonthProvider = Provider<AsyncValue<List<(Transaction, Category)>>>((
-  ref,
-) {
+    ref,
+    ) {
   final transactionsAsync = ref.watch(latestTransactionsProvider);
   final sel = ref.watch(selectedMonthProvider);
   final y = sel.year, m = sel.month;

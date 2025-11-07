@@ -1,175 +1,178 @@
-// lib/presentation/transactions/add_transaction_screen.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // FilteringTextInputFormatter
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart' show Value;
+import 'package:go_router/go_router.dart';
 
 import '../../core/state/db_providers.dart';
 import '../../data/db/app_database.dart';
+import '../../core/utils/icons.dart';
 
 class AddTransactionScreen extends ConsumerStatefulWidget {
   const AddTransactionScreen({super.key});
 
   @override
-  ConsumerState<AddTransactionScreen> createState() =>
-      _AddTransactionScreenState();
+  ConsumerState<AddTransactionScreen> createState() => _AddTransactionScreenState();
 }
 
 class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _amountCtrl = TextEditingController();
+  final _noteCtrl = TextEditingController();
+  DateTime _selectedDate = DateTime.now();
+  Category? _selectedCategory;
 
-  double? amount;
-  int? categoryId;
-  DateTime date = DateTime.now();
-  String? note;
+  @override
+  void dispose() {
+    _amountCtrl.dispose();
+    _noteCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime.now().subtract(const Duration(days: 365 * 5)),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (picked != null) {
+      setState(() => _selectedDate = picked);
+    }
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate() || _selectedCategory == null) return;
+    final db = ref.read(databaseProvider);
+    final amount = double.parse(_amountCtrl.text.replaceAll(',', '.'));
+    final note = _noteCtrl.text.trim();
+    final categoryId = _selectedCategory!.id;
+
+    await db.into(db.transactions).insert(
+      TransactionsCompanion.insert(
+        amount: amount * (_selectedCategory!.type == 'expense' ? -1 : 1),
+        note: Value(note.isEmpty ? null : note),
+        date: _selectedDate,
+        categoryId: _selectedCategory!.id,
+      ),
+    );
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Transacción guardada')),
+    );
+    context.goNamed('home'); // o la ruta que uses para volver
+  }
 
   @override
   Widget build(BuildContext context) {
     final db = ref.watch(databaseProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Nueva transacción')),
-      body: FutureBuilder<List<Category>>(
-        future: db.select(db.categories).get(),
-        builder: (context, snapshot) {
-          final cats = snapshot.data ?? [];
+      appBar: AppBar(
+        title: const Text('Nueva transacción'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+        child: FutureBuilder<List<Category>>(
+          future: db.getAllCategories(),
+          builder: (context, snap) {
+            final cats = snap.data ?? [];
+            final expenseCats = cats.where((c) => c.type == 'expense').toList();
+            final incomeCats = cats.where((c) => c.type == 'income').toList();
+            final allCats = [...incomeCats, ...expenseCats];
 
-          return Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Form(
+            return Form(
               key: _formKey,
-              child: ListView(
-                children: [
-                  // Monto
-                  TextFormField(
-                    decoration: const InputDecoration(
-                      labelText: 'Monto',
-                      hintText: 'Ej: 20.50',
-                      prefixIcon: Icon(Icons.attach_money),
-                      border: OutlineInputBorder(),
-                    ),
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                      signed: true,
-                    ),
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(
-                        RegExp(r'[-0-9.,]'),
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    TextFormField(
+                      controller: _amountCtrl,
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.attach_money),
+                        labelText: 'Monto',
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                       ),
-                    ],
-                    validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Ingresa un monto' : null,
-                    onSaved: (v) => amount =
-                        double.tryParse(v!.trim().replaceAll(',', '.')),
-                  ),
-                  const SizedBox(height: 12),
-
-                  // Categoría
-                  DropdownButtonFormField<int>(
-                    value: categoryId,
-                    items: cats
-                        .map(
-                          (c) => DropdownMenuItem(
-                        value: c.id,
-                        child: Text('${c.name} (${c.type})'),
-                      ),
-                    )
-                        .toList(),
-                    onChanged: (v) => setState(() => categoryId = v),
-                    validator: (v) => v == null ? 'Selecciona categoría' : null,
-                    decoration: const InputDecoration(
-                      labelText: 'Categoría',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-
-                  // Nota
-                  TextFormField(
-                    decoration: const InputDecoration(
-                      labelText: 'Nota (opcional)',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.notes),
-                    ),
-                    onSaved: (v) => note = v?.trim().isEmpty == true ? null : v,
-                  ),
-                  const SizedBox(height: 12),
-
-                  // Selector de fecha
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Fecha: ${date.toIso8601String().substring(0, 10)}',
-                          style: const TextStyle(fontSize: 16),
-                        ),
-                      ),
-                      TextButton.icon(
-                        icon: const Icon(Icons.calendar_today),
-                        label: const Text('Cambiar'),
-                        onPressed: () async {
-                          final picked = await showDatePicker(
-                            context: context,
-                            initialDate: date,
-                            firstDate: DateTime(2018),
-                            lastDate: DateTime(2100),
-                          );
-                          if (picked != null) {
-                            setState(() => date = picked);
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-
-                  // Guardar
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.check),
-                      label: const Text('Guardar'),
-                      onPressed: () async {
-                        if (!_formKey.currentState!.validate()) return;
-
-                        _formKey.currentState!.save();
-                        if (categoryId == null || amount == null) return;
-
-                        // Leemos la categoría para normalizar signo
-                        final selectedCategory = await (db.select(db.categories)
-                          ..where((c) => c.id.equals(categoryId!)))
-                            .getSingle();
-
-                        final double finalAmount;
-                        if (selectedCategory.type == 'expense') {
-                          finalAmount = -amount!.abs();
-                        } else {
-                          finalAmount = amount!.abs();
-                        }
-
-                        await db.into(db.transactions).insert(
-                          TransactionsCompanion.insert(
-                            amount: finalAmount,
-                            categoryId: categoryId!,
-                            date: DateTime(
-                              date.year,
-                              date.month,
-                              date.day,
-                            ),
-                            note: Value(note),
-                          ),
-                        );
-
-                        if (!mounted) return;
-                        Navigator.of(context).pop();
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      validator: (v) {
+                        if (v == null || v.trim().isEmpty) return 'Ingresa un monto';
+                        final d = double.tryParse(v.replaceAll(',', '.'));
+                        if (d == null || d == 0) return 'Monto inválido';
+                        return null;
                       },
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<Category>(
+                      value: _selectedCategory,
+                      decoration: InputDecoration(
+                        labelText: 'Categoría',
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                        suffixIcon: const Icon(Icons.arrow_drop_down),
+                      ),
+                      items: allCats.map((c) {
+                        return DropdownMenuItem(
+                          value: c,
+                          child: Row(
+                            children: [
+                              CircleAvatar(
+                                radius: 12,
+                                backgroundColor: (c.type == 'expense' ? Colors.red : Colors.green).withOpacity(0.15),
+                                child: Icon(categoryIcon(c.name, c.type, icon: c.icon), size: 20, color: (c.type == 'expense' ? Colors.red : Colors.green)),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(c.name),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (v) => setState(() => _selectedCategory = v),
+                      validator: (v) => v == null ? 'Selecciona una categoría' : null,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _noteCtrl,
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.note),
+                        labelText: 'Nota (opcional)',
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      maxLines: 2,
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Fecha: ${_selectedDate.toLocal().toString().split(' ')[0]}',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: _pickDate,
+                          icon: const Icon(Icons.calendar_today),
+                          label: const Text('Cambiar'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _submit,
+                        icon: const Icon(Icons.check),
+                        label: const Text('Guardar'),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }

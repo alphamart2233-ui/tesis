@@ -4,7 +4,7 @@ import 'package:drift/native.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-part 'app_database.g.dart'; // Se genera con build_runner
+part 'app_database.g.dart';
 
 // ---------------------------------------------------------------------------
 // TABLAS
@@ -12,46 +12,42 @@ part 'app_database.g.dart'; // Se genera con build_runner
 
 class Categories extends Table {
   IntColumn get id => integer().autoIncrement()();
-  TextColumn get name => text()();          // Nombre de la categoría
-  TextColumn get type => text()();          // 'income' | 'expense'
+  TextColumn get name => text()();
+  TextColumn get type => text()(); // 'income' | 'expense'
+  TextColumn get icon => text().nullable()();
 
-  // --- columnas para sincronización ---
   TextColumn get remoteId => text().nullable()();
-  IntColumn  get updatedAt => integer().withDefault(const Constant(0))();
+  IntColumn get updatedAt => integer().withDefault(const Constant(0))();
   BoolColumn get isDeleted => boolean().withDefault(const Constant(false))();
-  BoolColumn get isDirty   => boolean().withDefault(const Constant(true))();
+  BoolColumn get isDirty => boolean().withDefault(const Constant(true))();
 }
 
 class Transactions extends Table {
   IntColumn get id => integer().autoIncrement()();
-  RealColumn get amount => real()();        // + ingreso, - gasto
+  RealColumn get amount => real()();
   TextColumn get note => text().nullable()();
   DateTimeColumn get date => dateTime()();
   IntColumn get categoryId =>
       integer().references(Categories, #id, onDelete: KeyAction.cascade)();
 
-  // --- columnas para sincronización ---
   TextColumn get remoteId => text().nullable()();
-  IntColumn  get updatedAt => integer().withDefault(const Constant(0))();
+  IntColumn get updatedAt => integer().withDefault(const Constant(0))();
   BoolColumn get isDeleted => boolean().withDefault(const Constant(false))();
-  BoolColumn get isDirty   => boolean().withDefault(const Constant(true))();
+  BoolColumn get isDirty => boolean().withDefault(const Constant(true))();
 }
 
 class Budgets extends Table {
   IntColumn get id => integer().autoIncrement()();
-
-  /// FK a Categories.id (presupuesto por categoría)
   IntColumn get categoryId =>
       integer().references(Categories, #id, onDelete: KeyAction.cascade)();
 
-  RealColumn get limit => real()();         // Límite mensual
-  IntColumn get month => integer()();       // 1..12
-  IntColumn get year => integer()();        // p.ej. 2025
+  RealColumn get limit => real()();
+  IntColumn get month => integer()();
+  IntColumn get year => integer()();
 
-  // Índice/único opcional para (categoría, mes, año)
   @override
   List<String> get customConstraints => [
-    'UNIQUE(category_id, month, year)'
+    'UNIQUE(category_id, month, year)',
   ];
 }
 
@@ -64,7 +60,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 2; // ← antes 1
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -101,8 +97,7 @@ class AppDatabase extends _$AppDatabase {
   // TRANSACCIONES
   // -------------------------------------------------------------------------
 
-  Future<List<Transaction>> getAllTransactions() =>
-      select(transactions).get();
+  Future<List<Transaction>> getAllTransactions() => select(transactions).get();
   Stream<List<Transaction>> watchAllTransactions() =>
       select(transactions).watch();
 
@@ -126,14 +121,12 @@ class AppDatabase extends _$AppDatabase {
   Future<int> deleteBudget(int id) =>
       (delete(budgets)..where((t) => t.id.equals(id))).go();
 
-  /// Presupuestos por mes/año
   Future<List<Budget>> budgetsOf(int year, int month) =>
       (select(budgets)
         ..where((b) => b.year.equals(year))
         ..where((b) => b.month.equals(month)))
           .get();
 
-  /// Upsert simple por (categoryId, year, month)
   Future<void> upsertBudget({
     required int categoryId,
     required int year,
@@ -162,27 +155,53 @@ class AppDatabase extends _$AppDatabase {
     }
   }
 
-  /// Semilla opcional para categorías iniciales (útil si llamas db.seed())
+  // -------------------------------------------------------------------------
+  // SEED: CATEGORÍAS INICIALES
+  // -------------------------------------------------------------------------
+
   Future<void> seed() async {
     final existing = await select(categories).get();
     if (existing.isNotEmpty) return;
 
     await batch((b) {
       b.insertAll(categories, [
-        CategoriesCompanion.insert(name: 'Comida', type: 'expense'),
-        CategoriesCompanion.insert(name: 'Transporte', type: 'expense'),
-        CategoriesCompanion.insert(name: 'Salud', type: 'expense'),
-        CategoriesCompanion.insert(name: 'Otros', type: 'expense'),
-        CategoriesCompanion.insert(name: 'Salario', type: 'income'),
+        CategoriesCompanion.insert(
+          name: 'Comida',
+          type: 'expense',
+          icon: const Value('restaurant'),
+        ),
+        CategoriesCompanion.insert(
+          name: 'Transporte',
+          type: 'expense',
+          icon: const Value('bus'),
+        ),
+        CategoriesCompanion.insert(
+          name: 'Salud',
+          type: 'expense',
+          icon: const Value('health'),
+        ),
+        CategoriesCompanion.insert(
+          name: 'Otros',
+          type: 'expense',
+          icon: const Value('money'),
+        ),
+        CategoriesCompanion.insert(
+          name: 'Salario',
+          type: 'income',
+          icon: const Value('income'),
+        ),
       ]);
     });
   }
+
+  // -------------------------------------------------------------------------
+  // NORMALIZADOR
+  // -------------------------------------------------------------------------
 
   Future<int> normalizeExpenseSignsOnce() async {
     final t = transactions;
     final c = categories;
 
-    // Gasta + join: categorías de gasto con transacciones > 0
     final rows = await (select(t).join([
       innerJoin(c, c.id.equalsExp(t.categoryId)),
     ])
@@ -202,12 +221,12 @@ class AppDatabase extends _$AppDatabase {
   }
 
   // -------------------------------------------------------------------------
-  // HELPERS DE SINCRONIZACIÓN (Drift ↔ Firestore)
+  // SYNC: Categorías
   // -------------------------------------------------------------------------
 
-  // ---------------------- SYNC: Categories ----------------------
   Future<Category?> findCategoryByRemoteId(String remoteId) =>
-      (select(categories)..where((c) => c.remoteId.equals(remoteId))).getSingleOrNull();
+      (select(categories)..where((c) => c.remoteId.equals(remoteId)))
+          .getSingleOrNull();
 
   Future<void> insertCategoryFromRemote(String remoteId, Map<String, dynamic> m) async {
     await into(categories).insert(
@@ -260,16 +279,20 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
-  // ---------------------- SYNC: Transactions ----------------------
+  // -------------------------------------------------------------------------
+  // SYNC: Transacciones
+  // -------------------------------------------------------------------------
+
   Future<Transaction?> findTxByRemoteId(String remoteId) =>
-      (select(transactions)..where((t) => t.remoteId.equals(remoteId))).getSingleOrNull();
+      (select(transactions)..where((t) => t.remoteId.equals(remoteId)))
+          .getSingleOrNull();
 
   Future<void> insertTxFromRemote(String remoteId, Map<String, dynamic> m) async {
     await into(transactions).insert(
       TransactionsCompanion.insert(
         amount: (m['amount'] as num).toDouble(),
         date: DateTime.fromMillisecondsSinceEpoch(m['date'] as int),
-        categoryId: await _localCategoryIdFromRemote(m['categoryId'] as String?), // ✅ int directo
+        categoryId: await _localCategoryIdFromRemote(m['categoryId'] as String?),
         note: Value(m['note'] as String?),
         remoteId: Value(remoteId),
         updatedAt: Value((m['updatedAt'] as int?) ?? 0),
@@ -319,11 +342,10 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
-  // Resolver categoryId local desde remoteId (puede ser null)
   Future<int> _localCategoryIdFromRemote(String? remote) async {
-    if (remote == null) return (await _fallbackOtherCategoryId());
+    if (remote == null) return await _fallbackOtherCategoryId();
     final cat = await (select(categories)..where((c) => c.remoteId.equals(remote))).getSingleOrNull();
-    return cat?.id ?? (await _fallbackOtherCategoryId());
+    return cat?.id ?? await _fallbackOtherCategoryId();
   }
 
   Future<int> _fallbackOtherCategoryId() async {
@@ -336,7 +358,7 @@ class AppDatabase extends _$AppDatabase {
 }
 
 // ---------------------------------------------------------------------------
-// CONEXIÓN (archivo físico en Documents de la app)
+// CONEXIÓN LOCAL
 // ---------------------------------------------------------------------------
 
 LazyDatabase _openConnection() {

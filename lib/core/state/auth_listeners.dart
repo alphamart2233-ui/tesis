@@ -1,35 +1,31 @@
-import 'dart:async';
+// lib/core/state/auth_listeners.dart
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../../data/models/user_profile.dart';
+import '../providers/firebase_providers.dart';
 import '../../data/repositories/user_profile_repository.dart';
-import '../../core/providers/firebase_providers.dart';
 
-
+// Stream de auth (sigue igual)
 final authStateChangesProvider = StreamProvider<User?>((ref) {
   final auth = ref.watch(firebaseAuthProvider);
   return auth.authStateChanges();
 });
 
-final userProfileProvider = StreamProvider<UserProfile?>((ref) {
-  final authUser = ref.watch(authStateChangesProvider).value;
-  if (authUser == null) return const Stream.empty();
-  final repo = ref.watch(userProfileRepositoryProvider);
-  return repo.watch(authUser.uid);
+// Provider intermedio que mapea AsyncValue<User?> → User?
+final userProvider = Provider<User?>((ref) {
+  return ref.watch(authStateChangesProvider).value;
 });
 
-// Llama a ensureExists cuando haya login
+// Listener que asegura el perfil en Firestore cuando hay user
 final ensureUserProfileOnLoginProvider = Provider<void>((ref) {
   ref.listen<User?>(
-    authStateChangesProvider as ProviderListenable<User?>,
-        (prev, next) async {
-      final user = next;
-      if (user != null) {
+    userProvider, // <- ahora sí es ProviderListenable<User?>
+        (prevUser, nextUser) async {
+      if (nextUser != null) {
         final repo = ref.read(userProfileRepositoryProvider);
         await repo.ensureExists(
-          uid: user.uid,
-          email: user.email ?? '',
-          displayName: user.displayName,
+          uid: nextUser.uid,
+          email: nextUser.email ?? '',
+          displayName: nextUser.displayName,
           locale: 'es-EC',
           currency: 'USD',
         );

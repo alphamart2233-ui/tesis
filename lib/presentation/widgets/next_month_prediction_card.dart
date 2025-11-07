@@ -1,8 +1,7 @@
+// lib/presentation/widgets/next_month_prediction_card.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:drift/drift.dart' as dr; // evita conflicto con Column
-import '../../core/state/db_providers.dart';
-import '../../data/db/app_database.dart';
+import '../../core/state/analytics_providers.dart';
 import '../../core/utils/format.dart';
 
 class NextMonthPredictionCard extends ConsumerWidget {
@@ -10,120 +9,152 @@ class NextMonthPredictionCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final db = ref.watch(databaseProvider);
-    return FutureBuilder<_PredData>(
-      future: _computePrediction(db),
-      builder: (context, snap) {
-        if (!snap.hasData) {
-          return const Card(
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: Row(
+    final forecast = ref.watch(nextMonthForecastProvider);
+    final textTheme = Theme.of(context).textTheme;
+
+    // Usamos Card.filled para un look M3 más suave
+    return Card.filled(
+      elevation: 0,
+      color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: forecast.when(
+          loading: () => const _LoadingRow(),
+          error: (e, _) => Center(child: Text('Error en predicción: $e')),
+          data: (f) {
+            // Si no hay datos, muestra un mensaje claro
+            if (!f.hasData) {
+              return Row(
                 children: [
-                  CircularProgressIndicator(),
-                  SizedBox(width: 12),
-                  Text('Calculando predicción...'),
+                  Icon(Icons.info_outline, color: textTheme.bodySmall?.color),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Sin datos suficientes para predecir el próximo mes.',
+                      style: textTheme.bodySmall,
+                    ),
+                  ),
                 ],
-              ),
-            ),
-          );
-        }
-        final data = snap.data!;
+              );
+            }
 
-        if (data.samples.isEmpty) {
-          return const Card(
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Aún no hay datos suficientes para predecir el próximo mes.'),
-            ),
-          );
-        }
+            // Cálculos (igual que antes)
+            final bandLow = (f.expenses - f.expensesStdDev).clamp(0, double.infinity);
+            final bandHigh = f.expenses + f.expensesStdDev;
+            final balance = f.balance;
+            final balanceColor = balance >= 0 ? Colors.green.shade600 : Colors.red.shade600;
 
-        return Card(
-          elevation: 2,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
+            return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Predicción de gasto (próximo mes)',
-                    style: TextStyle(fontWeight: FontWeight.w700)),
-                const SizedBox(height: 8),
+                // Título
                 Text(
-                  Fx.money(data.prediction),
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                  'Predicción del próximo mes',
+                  style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: data.samples
-                      .map((e) => Chip(
-                    label: Text('${e.label}: ${Fx.money(e.value)}'),
-                  ))
-                      .toList(),
+                const SizedBox(height: 16),
+
+                // 1. HÉROE: Balance Proyectado
+                Center(
+                  child: Column(
+                    children: [
+                      Text(
+                        'Balance Proyectado',
+                        style: textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        Fx.money(balance),
+                        style: textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: balanceColor,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Método: promedio móvil de los últimos 3 meses de gastos.',
-                  style: TextStyle(fontSize: 12, color: Colors.black54),
+                const SizedBox(height: 4),
+
+                // 2. CONTEXTO: Banda de Confianza
+                Center(
+                  child: Text(
+                    'Banda: ${Fx.money(bandLow)} – ${Fx.money(bandHigh)}',
+                    style: textTheme.bodySmall,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const Divider(height: 24),
+
+                // 3. DESGLOSE: Gasto e Ingreso
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _buildStatColumn(
+                      'Gasto',
+                      f.expenses,
+                      Icons.trending_down,
+                      Colors.red.shade600,
+                      textTheme,
+                    ),
+                    _buildStatColumn(
+                      'Ingreso',
+                      f.incomes,
+                      Icons.trending_up,
+                      Colors.green.shade600,
+                      textTheme,
+                    ),
+                  ],
                 ),
               ],
-            ),
-          ),
-        );
-      },
+            );
+          },
+        ),
+      ),
     );
   }
 
-  Future<_PredData> _computePrediction(AppDatabase db) async {
-    final now = DateTime.now();
-    final month0 = DateTime(now.year, now.month, 1);        // inicio mes actual
-    final start = DateTime(month0.year, month0.month - 3, 1); // 3 meses atrás (excluye mes actual)
-
-    final txs = await (db.select(db.transactions)
-      ..where((t) => t.date.isBiggerOrEqualValue(start))
-      ..where((t) => t.date.isSmallerThanValue(month0)))
-        .get();
-
-    // Agrupa gastos (amount < 0) por YYYY-MM y suma en positivo
-    final Map<String, double> perMonth = {};
-    for (final t in txs) {
-      if (t.amount >= 0) continue; // sólo gastos
-      final d = t.date;
-      final key = '${d.year}-${d.month.toString().padLeft(2, '0')}';
-      perMonth.update(key, (v) => v + (-t.amount), ifAbsent: () => -t.amount);
-    }
-
-    // Orden cronológico de los últimos 3 meses previos
-    final labels = List.generate(3, (i) {
-      final dt = DateTime(month0.year, month0.month - (3 - i), 1);
-      return '${dt.year}-${dt.month.toString().padLeft(2, '0')}';
-    });
-
-    final samples = <_Sample>[];
-    double sum = 0;
-    int n = 0;
-    for (final k in labels) {
-      final v = perMonth[k] ?? 0.0;
-      samples.add(_Sample(k, v));
-      sum += v;
-      n++;
-    }
-
-    final prediction = n == 0 ? 0.0 : (sum / n); // SMA(3)
-    return _PredData(prediction: prediction, samples: samples);
+  // Helper para el desglose (Gasto/Ingreso)
+  Widget _buildStatColumn(
+      String label,
+      double value,
+      IconData icon,
+      Color color,
+      TextTheme textTheme,
+      ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 16),
+            const SizedBox(width: 4),
+            Text(label, style: textTheme.bodyMedium),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          Fx.money(value),
+          style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+        ),
+      ],
+    );
   }
 }
 
-class _Sample {
-  final String label;
-  final double value;
-  _Sample(this.label, this.value);
-}
-
-class _PredData {
-  final double prediction;
-  final List<_Sample> samples;
-  _PredData({required this.prediction, required this.samples});
+// Helper de Carga
+class _LoadingRow extends StatelessWidget {
+  const _LoadingRow();
+  @override
+  Widget build(BuildContext context) {
+    return const Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+        SizedBox(width: 10),
+        Text('Calculando predicción...'),
+      ],
+    );
+  }
 }
