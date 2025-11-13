@@ -1,0 +1,237 @@
+//lib/data/repositories/transaction_repository.dart
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:drift/drift.dart' as dr;
+
+
+import 'package:tesis/data/db/app_database.dart';
+import 'package:tesis/data/db/daos/transaction_dao.dart';
+import 'package:tesis/main.dart';
+import 'package:tesis/domain/services/prediction_service.dart';
+import 'package:tesis/core/state/filters.dart';
+import '../../core/state/db_providers.dart';
+
+/// ------------------------------
+/// DAO Provider
+/// ------------------------------
+final transactionDaoProvider = Provider<TransactionDao>((ref) {
+  final db = ref.watch(databaseProvider);
+  return TransactionDao(db);
+});
+
+/// ------------------------------
+/// Últimos movimientos (stream general)
+/// ------------------------------
+final latestTransactionsProvider =
+StreamProvider<List<(Transaction, Category)>>((ref) {
+  final dao = ref.watch(transactionDaoProvider);
+  return dao.watchLatest(limit: 50);
+});
+
+// --- Modelo para la serie mensual (gasto por mes) ---
+class MonthlyPoint {
+  final String label; // 'YYYY-MM'
+  final double total; // total de gasto (positivo)
+  const MonthlyPoint(this.label, this.total);
+}
+
+/// ------------------------------
+/// Serie mensual (6 meses hasta el mes seleccionado) REACTIVA
+/// ------------------------------
+final monthlyExpenseSeriesProvider =
+StreamProvider.autoDispose<List<MonthlyPoint>>((ref) {
+  final db  = ref.watch(databaseProvider);
+  final sel = ref.watch(selectedMonthProvider);
+  final t = db.transactions;
+
+  final start = DateTime(sel.year, sel.month - 5, 1);
+  final end   = DateTime(sel.year, sel.month + 1, 1);
+
+  final labels = List.generate(6, (i) {
+    final d = DateTime(sel.year, sel.month - (5 - i), 1);
+    return '${d.year}-${d.month.toString().padLeft(2, '0')}';
+  });
+  final Map<String, double> byMonth = {for (final k in labels) k: 0.0};
+
+  final q = (db.select(t)
+  // ⬇⬇⬇ usa lambda (tbl) => ...
+    ..where((tbl) => tbl.date.isBiggerOrEqualValue(start))
+    ..where((tbl) => tbl.date.isSmallerThanValue(end)))
+      .watch();
+
+  return q.map((txs) {
+    for (final k in byMonth.keys) { byMonth[k] = 0.0; }
+    for (final tx in txs) {
+      final key = '${tx.date.year}-${tx.date.month.toString().padLeft(2, '0')}';
+      if (byMonth.containsKey(key) && tx.amount < 0) {
+        byMonth[key] = byMonth[key]! + (-tx.amount);
+      }
+    }
+    return labels.map((k) => MonthlyPoint(k, byMonth[k]!)).toList();
+  });
+});
+
+
+/// ------------------------------
+/// Servicio de predicción + estimados por categoría (solo gasto)
+/// ------------------------------
+final predictionServiceProvider = Provider<PredictionService>((ref) {
+  final db = ref.watch(databaseProvider);
+  return PredictionService(db);
+});
+
+/// Devuelve [(nombreCategoria, estimado)] para el próximo mes (solo categorías de GASTO)
+final nextMonthExpenseEstimatesProvider =
+FutureProvider<List<(String, double)>>((ref) async {
+  final db = ref.watch(databaseProvider);
+  final svc = ref.watch(predictionServiceProvider);
+  final estimates = await svc.estimateNextMonthByCategory();
+
+  // Catálogo de categorías
+  final allCats = await db.select(db.categories).get();
+  final byId = {for (final c in allCats) c.id: c};
+
+  final result = <(String, double)>[];
+  estimates.forEach((catId, value) {
+    final cat = byId[catId];
+    if (cat == null) return;
+    if (cat.type != 'expense') return;
+    result.add((cat.name, value));
+  });
+
+  // Orden descendente por estimado
+  result.sort((a, b) => b.$2.compareTo(a.$2));
+  return result;
+});
+
+/// ------------------------------
+/// Alertas: estimado (próximo mes) > presupuesto (próximo mes)
+/// ------------------------------
+class BudgetAlert {
+  final String categoryName;
+  final double estimate;
+  final double limit;
+  double get overBy => estimate - limit;
+  BudgetAlert({
+    required this.categoryName,
+    required this.estimate,
+    required this.limit,
+  });
+}
+
+final budgetAlertsProvider = FutureProvider<List<BudgetAlert>>((ref) async {
+  final db = ref.watch(databaseProvider);
+  final svc = ref.watch(predictionServiceProvider);
+
+  // Estimados por categoría (próximo mes)
+  final estimates = await svc.estimateNextMonthByCategory();
+
+  // Próximo mes (año/mes)
+  final now = DateTime.now();
+  final next = DateTime(now.year, now.month + 1, 1);
+  final year = next.year;
+  final month = next.month;
+
+  // Presupuestos de ese mes
+  final budgets = await (db.select(
+    db.budgets,
+  )..where((b) => b.year.equals(year) & b.month.equals(month))).get();
+
+  if (budgets.isEmpty) return [];
+
+  // Catálogo de categorías
+  final cats = await db.select(db.categories).get();
+  final byId = {for (final c in cats) c.id: c};
+
+  final alerts = <BudgetAlert>[];
+  for (final b in budgets) {
+    final cat = byId[b.categoryId];
+    if (cat == null) continue;
+    if (cat.type != 'expense') continue; // solo gastos
+    final est = estimates[b.categoryId] ?? 0.0;
+    if (est > b.limit) {
+      alerts.add(
+        BudgetAlert(categoryName: cat.name, estimate: est, limit: b.limit),
+      );
+    }
+  }
+  alerts.sort((a, b) => b.overBy.compareTo(a.overBy));
+  return alerts;
+});
+
+/// ------------------------------
+/// Resumen mensual (ingresos, gastos, balance) REACTIVO
+/// ------------------------------
+class MonthlySummary {
+  final int year;
+  final int month;
+  final double income;   // suma de montos >= 0
+  final double expense;  // suma positiva de gastos
+  double get balance => income - expense;
+  const MonthlySummary({
+    required this.year,
+    required this.month,
+    required this.income,
+    required this.expense,
+  });
+}
+
+final monthlySummaryProvider =
+StreamProvider.autoDispose<MonthlySummary>((ref) {
+  final db = ref.watch(databaseProvider);
+  final sel = ref.watch(selectedMonthProvider);
+  final t = db.transactions;
+
+  final first = DateTime(sel.year, sel.month, 1);
+  final next  = DateTime(sel.year, sel.month + 1, 1);
+
+  final q = (db.select(t)
+  // ⬇⬇⬇ aquí también con lambda
+    ..where((tbl) => tbl.date.isBiggerOrEqualValue(first))
+    ..where((tbl) => tbl.date.isSmallerThanValue(next)))
+      .watch();
+
+  return q.map((txs) {
+    double income = 0, expense = 0;
+    for (final tx in txs) {
+      if (tx.amount >= 0) income += tx.amount;
+      else expense += -tx.amount;
+    }
+    return MonthlySummary(
+      year: sel.year, month: sel.month,
+      income: income, expense: expense,
+    );
+  });
+});
+
+
+/// ------------------------------
+/// Últimos movimientos filtrados por el mes seleccionado (REACTIVO)
+/// ------------------------------
+final latestByMonthProvider =
+StreamProvider.autoDispose<List<(Transaction, Category)>>((ref) {
+  final db = ref.watch(databaseProvider);
+  final sel = ref.watch(selectedMonthProvider);
+
+  final t = db.transactions;
+  final c = db.categories;
+
+  final first = DateTime(sel.year, sel.month, 1);
+  final next  = DateTime(sel.year, sel.month + 1, 1);
+
+  final query = (db.select(t).join([
+    dr.innerJoin(c, c.id.equalsExp(t.categoryId)),
+  ])
+    ..where(t.date.isBiggerOrEqualValue(first))
+    ..where(t.date.isSmallerThanValue(next))
+    ..orderBy([dr.OrderingTerm.desc(t.date), dr.OrderingTerm.desc(t.id)]));
+
+  return query.watch().map((rows) {
+    return rows.map<(Transaction, Category)>((r) {
+      final tx  = r.readTable(t);
+      final cat = r.readTable(c);
+      return (tx, cat);
+    }).toList();
+  });
+});
+
