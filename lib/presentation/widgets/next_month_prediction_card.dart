@@ -1,8 +1,8 @@
-// lib/presentation/widgets/next_month_prediction_card.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/state/analytics_providers.dart';
 import '../../core/utils/format.dart';
+import '../../core/state/db_providers.dart';
 
 class NextMonthPredictionCard extends ConsumerWidget {
   const NextMonthPredictionCard({super.key});
@@ -10,24 +10,24 @@ class NextMonthPredictionCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final forecast = ref.watch(nextMonthForecastProvider);
+    final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 
-    // Usamos Card.filled para un look M3 más suave
     return Card.filled(
-      elevation: 0,
-      color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+      elevation: 1,
+      color: scheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: forecast.when(
           loading: () => const _LoadingRow(),
           error: (e, _) => Center(child: Text('Error en predicción: $e')),
           data: (f) {
-            // Si no hay datos, muestra un mensaje claro
             if (!f.hasData) {
               return Row(
                 children: [
-                  Icon(Icons.info_outline, color: textTheme.bodySmall?.color),
-                  const SizedBox(width: 8),
+                  Icon(Icons.info_outline, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: 8                  ),
                   Expanded(
                     child: Text(
                       'Sin datos suficientes para predecir el próximo mes.',
@@ -38,30 +38,29 @@ class NextMonthPredictionCard extends ConsumerWidget {
               );
             }
 
-            // Cálculos (igual que antes)
-            final bandLow = (f.expenses - f.expensesStdDev).clamp(0, double.infinity);
-            final bandHigh = f.expenses + f.expensesStdDev;
-            final balance = f.balance;
-            final balanceColor = balance >= 0 ? Colors.green.shade600 : Colors.red.shade600;
+            final bandLow =
+            ((f.expenses - f.expensesStdDev).clamp(0, double.infinity))
+                .toDouble();
+            final bandHigh = (f.expenses + f.expensesStdDev).toDouble();
+            final balance = f.balance.toDouble();
+            final balanceColor =
+            balance >= 0 ? const Color(0xFF2E8B57) : const Color(0xFFAB2D25);
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Título
                 Text(
                   'Predicción del próximo mes',
-                  style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                  style: textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 16),
 
-                // 1. HÉROE: Balance Proyectado
+                // Balance proyectado central
                 Center(
                   child: Column(
                     children: [
-                      Text(
-                        'Balance Proyectado',
-                        style: textTheme.bodySmall,
-                      ),
+                      Text('Balance Proyectado', style: textTheme.bodySmall),
                       const SizedBox(height: 4),
                       Text(
                         Fx.money(balance),
@@ -73,20 +72,29 @@ class NextMonthPredictionCard extends ConsumerWidget {
                     ],
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 6),
 
-                // 2. CONTEXTO: Banda de Confianza
-                Center(
-                  child: Text(
-                    'Banda: ${Fx.money(bandLow)} – ${Fx.money(bandHigh)}',
-                    style: textTheme.bodySmall,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                // Texto + barra visual de la banda
+                Column(
+                  children: [
+                    Text(
+                      'Banda: ${Fx.money(bandLow)} – ${Fx.money(bandHigh)}',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    _ConfidenceBar(
+                      low: bandLow,
+                      high: bandHigh,
+                      value: balance.abs(),
+                      color: balanceColor,
+                    ),
+                  ],
                 ),
                 const Divider(height: 24),
 
-                // 3. DESGLOSE: Gasto e Ingreso
+                // Gasto / Ingreso
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
@@ -94,14 +102,14 @@ class NextMonthPredictionCard extends ConsumerWidget {
                       'Gasto',
                       f.expenses,
                       Icons.trending_down,
-                      Colors.red.shade600,
+                      const Color(0xFFAB2D25),
                       textTheme,
                     ),
                     _buildStatColumn(
                       'Ingreso',
                       f.incomes,
                       Icons.trending_up,
-                      Colors.green.shade600,
+                      const Color(0xFF2E8B57),
                       textTheme,
                     ),
                   ],
@@ -114,7 +122,6 @@ class NextMonthPredictionCard extends ConsumerWidget {
     );
   }
 
-  // Helper para el desglose (Gasto/Ingreso)
   Widget _buildStatColumn(
       String label,
       double value,
@@ -123,7 +130,6 @@ class NextMonthPredictionCard extends ConsumerWidget {
       TextTheme textTheme,
       ) {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Row(
           mainAxisSize: MainAxisSize.min,
@@ -136,14 +142,153 @@ class NextMonthPredictionCard extends ConsumerWidget {
         const SizedBox(height: 4),
         Text(
           Fx.money(value),
-          style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+          style: textTheme.titleMedium
+              ?.copyWith(fontWeight: FontWeight.w600, color: color),
         ),
       ],
     );
   }
 }
 
-// Helper de Carga
+// Barra visual del rango de confianza con etiquetas mín/máx y marcador animado
+class _ConfidenceBar extends StatefulWidget {
+  final double low;
+  final double high;
+  final double value;
+  final Color color;
+
+  const _ConfidenceBar({
+    required this.low,
+    required this.high,
+    required this.value,
+    required this.color,
+    super.key,
+  });
+
+  @override
+  State<_ConfidenceBar> createState() => _ConfidenceBarState();
+}
+
+class _ConfidenceBarState extends State<_ConfidenceBar>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    )..forward();
+
+    _animation = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _ConfidenceBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value != widget.value) {
+      _controller
+        ..reset()
+        ..forward();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final ratio =
+    ((widget.value - widget.low) / (widget.high - widget.low)).clamp(0.0, 1.0);
+
+    return Column(
+      children: [
+        SizedBox(
+          height: 24,
+          child: Stack(
+            alignment: Alignment.centerLeft,
+            children: [
+              // Banda base (gris claro)
+              Container(
+                height: 8,
+                decoration: BoxDecoration(
+                  color: scheme.outlineVariant.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+
+              // Porción coloreada
+              FractionallySizedBox(
+                widthFactor: ratio,
+                child: Container(
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: widget.color.withOpacity(0.6),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+
+              // 🔵 Marcador animado
+              AnimatedBuilder(
+                animation: _animation,
+                builder: (_, __) {
+                  final width = MediaQuery.of(context).size.width - 64;
+                  final pos = (ratio * width * _animation.value)
+                      .clamp(0.0, width);
+                  return Positioned(
+                    left: pos,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 400),
+                      curve: Curves.easeInOut,
+                      width: 14,
+                      height: 14,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: widget.color,
+                        border: Border.all(
+                          color: scheme.surface,
+                          width: 2,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: widget.color.withOpacity(0.35),
+                            blurRadius: 6,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Mín', style: Theme.of(context).textTheme.labelSmall),
+            Text('Máx', style: Theme.of(context).textTheme.labelSmall),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+
+
 class _LoadingRow extends StatelessWidget {
   const _LoadingRow();
   @override

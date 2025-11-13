@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:intl/intl.dart';
-import 'package:go_router/go_router.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:rxdart/rxdart.dart';
 
 import '../../core/state/db_providers.dart';
 import '../../data/db/app_database.dart';
@@ -21,16 +21,6 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   late int _year;
   late int _month;
 
-  final _colors = [
-    Colors.redAccent,
-    Colors.blueAccent,
-    Colors.green,
-    Colors.orange,
-    Colors.purple,
-    Colors.teal,
-    Colors.amber,
-  ];
-
   @override
   void initState() {
     super.initState();
@@ -42,6 +32,23 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
   @override
   Widget build(BuildContext context) {
     final db = ref.watch(databaseProvider);
+    final scheme = Theme.of(context).colorScheme;
+
+    final cats$ = db.select(db.categories).watch();
+    final budgets$ = (db.select(db.budgets)
+      ..where((b) => b.year.equals(_year))
+      ..where((b) => b.month.equals(_month)))
+        .watch();
+
+    final combined$ = Rx.combineLatest2<List<Category>, List<Budget>,
+        (List<Category>, List<Budget>)>(
+      cats$,
+      budgets$,
+          (cats, budgets) => (cats, budgets),
+    );
+
+    final monthLabel =
+    DateFormat.yMMMM('es_ES').format(DateTime(_year, _month));
 
     return Scaffold(
       appBar: AppBar(
@@ -50,14 +57,14 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
         actions: [
           IconButton(
             tooltip: 'Cambiar mes',
-            icon: const Icon(Icons.calendar_month),
+            icon: const Icon(Icons.calendar_month_rounded),
             onPressed: () async {
               final picked = await showDialog<(int, int)>(
                 context: context,
-                builder: (_) => _MonthPickerDialog(year: _year, month: _month),
+                builder: (_) =>
+                    _MonthPickerDialog(year: _year, month: _month),
               );
-              if (!mounted) return;
-              if (picked != null) {
+              if (picked != null && mounted) {
                 setState(() {
                   _year = picked.$1;
                   _month = picked.$2;
@@ -67,14 +74,17 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        tooltip: 'Agregar/Editar presupuesto',
+
+      floatingActionButton: FloatingActionButton.extended(
+        label: const Text('Nuevo'),
+        icon: const Icon(Icons.add_rounded),
         onPressed: () async {
           final cats = await db.select(db.categories).get();
           if (!mounted) return;
-          if (cats.isEmpty) {
+          final expenseCats = cats.where((c) => c.type == 'expense').toList();
+          if (expenseCats.isEmpty) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Primero crea categorías.')),
+              const SnackBar(content: Text('Primero crea categorías de gasto.')),
             );
             return;
           }
@@ -83,194 +93,341 @@ class _BudgetsScreenState extends ConsumerState<BudgetsScreen> {
             builder: (_) => _BudgetDialog(
               year: _year,
               month: _month,
-              categories: cats.where((c) => c.type == 'expense').toList(),
+              categories: expenseCats,
             ),
           );
-          if (!mounted) return;
-          if (result != null) {
-            final existing = await (db.select(db.budgets)
-              ..where((b) => b.categoryId.equals(result.categoryId))
-              ..where((b) => b.year.equals(_year))
-              ..where((b) => b.month.equals(_month)))
-                .getSingleOrNull();
+          if (!mounted || result == null) return;
 
-            if (existing == null) {
-              await db.into(db.budgets).insert(
-                BudgetsCompanion.insert(
-                  categoryId: result.categoryId,
-                  year: _year,
-                  month: _month,
-                  limit: result.limit,
-                ),
-              );
-            } else {
-              await (db.update(db.budgets)
-                ..where((b) => b.id.equals(existing.id)))
-                  .write(BudgetsCompanion(limit: Value(result.limit)));
-            }
-            if (!mounted) return;
-            setState(() {});
-          }
-        },
-        child: const Icon(Icons.add),
-      ),
-      // ⛔ bottomNavigationBar eliminado — ShellRoute lo maneja
-
-      body: FutureBuilder<List<Object?>>(
-        future: Future.wait([
-          db.select(db.categories).get(),
-          (db.select(db.budgets)
+          final existing = await (db.select(db.budgets)
+            ..where((b) => b.categoryId.equals(result.categoryId))
             ..where((b) => b.year.equals(_year))
             ..where((b) => b.month.equals(_month)))
-              .get(),
-        ]),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
+              .getSingleOrNull();
+
+          if (existing == null) {
+            await db.into(db.budgets).insert(
+              BudgetsCompanion.insert(
+                categoryId: result.categoryId,
+                year: _year,
+                month: _month,
+                limit: result.limit,
+              ),
+            );
+          } else {
+            await (db.update(db.budgets)..where((b) => b.id.equals(existing.id)))
+                .write(BudgetsCompanion(limit: Value(result.limit)));
+          }
+        },
+      ),
+
+      body: StreamBuilder<(List<Category>, List<Budget>)>(
+        stream: combined$,
+        builder: (context, snap) {
+          if (!snap.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          final cats = snapshot.data![0] as List<Category>;
-          final budgets = snapshot.data![1] as List<Budget>;
+          final cats = snap.data!.$1;
+          final budgets = snap.data!.$2;
+          final expenseCats = cats.where((c) => c.type == 'expense').toList()
+            ..sort((a, b) => a.name.compareTo(b.name));
 
-          final expenseCats = cats.where((c) => c.type == 'expense').toList();
-          final budgetsByCat = {for (var b in budgets) b.categoryId: b};
+          final budgetsByCat = {for (final b in budgets) b.categoryId: b};
+          final chartData = <String, double>{};
+          double total = 0;
 
-          final dataMap = <String, double>{};
-          for (var c in expenseCats) {
+          for (final c in expenseCats) {
             final b = budgetsByCat[c.id];
             if (b != null && b.limit > 0) {
-              dataMap[c.name] = b.limit;
+              chartData[c.name] = b.limit;
+              total += b.limit;
             }
           }
 
-          final items = expenseCats..sort((a, b) => a.name.compareTo(b.name));
-
-          return ListView.builder(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            itemCount: items.length + (dataMap.isNotEmpty ? 1 : 0),
-            itemBuilder: (context, i) {
-              if (dataMap.isNotEmpty && i == 0) {
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: AspectRatio(
-                    aspectRatio: 1.3,
-                    child: PieChart(
-                      PieChartData(
-                        sections: dataMap.entries.toList().asMap().entries.map((entry) {
-                          final index = entry.key;
-                          final e = entry.value;
-                          return PieChartSectionData(
-                            value: e.value,
-                            title: e.value.toStringAsFixed(0),
-                            color: _colors[index % _colors.length],
-                            radius: 50,
-                          );
-                        }).toList(),
-                        sectionsSpace: 4,
-                        centerSpaceRadius: 30,
+          return CustomScrollView(
+            slivers: [
+              if (chartData.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                    child: Card(
+                      elevation: 0,
+                      color: scheme.surfaceContainerHighest,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: _BudgetDonut(
+                          data: chartData,
+                          total: total,
+                          colors: [
+                            scheme.primary,
+                            scheme.secondary,
+                            scheme.tertiary,
+                            scheme.primaryContainer,
+                            scheme.secondaryContainer,
+                            scheme.tertiaryContainer,
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                );
-              }
+                ),
 
-              final offset = dataMap.isNotEmpty ? 1 : 0;
-              final cat = items[i - offset];
-              final b = budgetsByCat[cat.id];
-
-              final isExpense = cat.type == 'expense';
-              final icon = categoryIcon(cat.name, cat.type, icon: cat.icon);
-              final formattedDate = DateFormat.yMMMM('es_ES').format(DateTime(_year, _month));
-
-              return Card(
-                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  leading: CircleAvatar(
-                    backgroundColor: (isExpense ? Colors.red : Colors.green).withOpacity(0.15),
-                    child: Icon(icon, color: isExpense ? Colors.red : Colors.green),
-                  ),
-                  title: Text(cat.name, style: Theme.of(context).textTheme.titleMedium),
-                  subtitle: Text('Presupuesto: $formattedDate'),
-                  trailing: Text(
-                    b == null ? '—' : '\$${b.limit.toStringAsFixed(2)}',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.primary,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  onTap: () async {
-                    final result = await showDialog<_BudgetFormResult>(
-                      context: context,
-                      builder: (_) => _BudgetDialog(
-                        year: _year,
-                        month: _month,
-                        categories: [cat],
-                        initial: b?.limit,
-                        initialCategoryId: cat.id,
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.wallet_rounded, size: 18),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Presupuestos de $monthLabel',
+                        style: Theme.of(context).textTheme.titleMedium,
                       ),
-                    );
-                    if (!mounted) return;
-                    if (result != null) {
-                      final existing = await (db.select(db.budgets)
-                        ..where((bb) => bb.categoryId.equals(result.categoryId))
-                        ..where((bb) => bb.year.equals(_year))
-                        ..where((bb) => bb.month.equals(_month)))
-                          .getSingleOrNull();
+                    ],
+                  ),
+                ),
+              ),
 
-                      if (existing == null) {
-                        await db.into(db.budgets).insert(
-                          BudgetsCompanion.insert(
-                            categoryId: result.categoryId,
+              SliverList.separated(
+                itemCount: expenseCats.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (_, i) {
+                  final cat = expenseCats[i];
+                  final b = budgetsByCat[cat.id];
+                  final icon =
+                  categoryIcon(cat.name, cat.type, icon: cat.icon);
+
+                  return Card(
+                    color: scheme.surfaceContainerLow,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    margin: const EdgeInsets.symmetric(horizontal: 16),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: scheme.primary.withOpacity(0.1),
+                        child: Icon(icon, color: scheme.primary, size: 20),
+                      ),
+                      title: Text(
+                        cat.name,
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text(
+                        b == null
+                            ? 'Sin presupuesto'
+                            : 'Presupuesto: $monthLabel',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      trailing: Text(
+                        b == null
+                            ? '—'
+                            : NumberFormat.currency(symbol: '\$')
+                            .format(b.limit),
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(
+                          color: scheme.primary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      onTap: () async {
+                        final result = await showDialog<_BudgetFormResult>(
+                          context: context,
+                          builder: (_) => _BudgetDialog(
                             year: _year,
                             month: _month,
-                            limit: result.limit,
+                            categories: [cat],
+                            initial: b?.limit,
+                            initialCategoryId: cat.id,
                           ),
                         );
-                      } else {
-                        await (db.update(db.budgets)
-                          ..where((bb) => bb.id.equals(existing.id)))
-                            .write(BudgetsCompanion(limit: Value(result.limit)));
-                      }
-                      if (!mounted) return;
-                      setState(() {});
-                    }
-                  },
-                  onLongPress: b == null
-                      ? null
-                      : () async {
-                    final ok = await showDialog<bool>(
-                      context: context,
-                      builder: (_) => AlertDialog(
-                        title: const Text('Eliminar presupuesto'),
-                        content: Text('¿Quitar presupuesto de "${cat.name}" para $formattedDate?'),
-                        actions: [
-                          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-                          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Eliminar')),
-                        ],
-                      ),
-                    ) ??
-                        false;
-                    if (ok) {
-                      await (db.delete(db.budgets)..where((bb) => bb.id.equals(b.id))).go();
-                      if (!mounted) return;
-                      setState(() {});
-                    }
-                  },
-                ),
-              );
-            },
+                        if (result == null) return;
+
+                        final existing = await (db.select(db.budgets)
+                          ..where((bb) =>
+                              bb.categoryId.equals(result.categoryId))
+                          ..where((bb) => bb.year.equals(_year))
+                          ..where((bb) => bb.month.equals(_month)))
+                            .getSingleOrNull();
+
+                        if (existing == null) {
+                          await db.into(db.budgets).insert(
+                            BudgetsCompanion.insert(
+                              categoryId: result.categoryId,
+                              year: _year,
+                              month: _month,
+                              limit: result.limit,
+                            ),
+                          );
+                        } else {
+                          await (db.update(db.budgets)
+                            ..where((bb) => bb.id.equals(existing.id)))
+                              .write(BudgetsCompanion(
+                              limit: Value(result.limit)));
+                        }
+                      },
+                      onLongPress: b == null
+                          ? null
+                          : () async {
+                        final ok = await showDialog<bool>(
+                          context: context,
+                          builder: (_) => AlertDialog(
+                            title: const Text('Eliminar presupuesto'),
+                            content: Text(
+                                '¿Quitar presupuesto de "${cat.name}" para $monthLabel?'),
+                            actions: [
+                              TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(context, false),
+                                  child: const Text('Cancelar')),
+                              TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(context, true),
+                                  child: const Text('Eliminar')),
+                            ],
+                          ),
+                        );
+                        if (ok != true) return;
+                        await (db.delete(db.budgets)
+                          ..where((bb) => bb.id.equals(b.id)))
+                            .go();
+                      },
+                    ),
+                  );
+                },
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 80)),
+            ],
           );
         },
       ),
     );
   }
 }
+
+class _BudgetDonut extends StatelessWidget {
+  const _BudgetDonut({
+    required this.data,
+    required this.colors,
+    required this.total,
+  });
+
+  final Map<String, double> data;
+  final List<Color> colors;
+  final double total;
+
+  Color _tint(Color base, double amount) {
+    final hsl = HSLColor.fromColor(base);
+    return hsl
+        .withLightness((hsl.lightness * (1 - amount)).clamp(0.25, 0.75))
+        .toColor();
+  }
+
+  // ---------- Grafico tipo dona ----------
+  @override
+  Widget build(BuildContext context) {
+    final entries = data.entries.toList();
+    final scheme = Theme.of(context).colorScheme;
+    final brightness = Theme.of(context).brightness;
+
+    // 🎨 Paleta armónica (sin rojo)
+    final baseColors = [
+      scheme.primary,
+      scheme.secondary,
+      scheme.tertiary,
+      scheme.primaryContainer,
+      scheme.secondaryContainer,
+      scheme.tertiaryContainer,
+    ];
+
+    // Ajustar brillo según tema
+    final palette = baseColors
+        .map((c) =>
+    brightness == Brightness.light ? _tint(c, 0.05) : _tint(c, -0.1))
+        .toList();
+
+    return Column(
+      children: [
+        AspectRatio(
+          aspectRatio: 1.4,
+          child: PieChart(
+            PieChartData(
+              sectionsSpace: 3,
+              centerSpaceRadius: 42,
+              startDegreeOffset: -90,
+              sections: List.generate(entries.length, (i) {
+                final e = entries[i];
+                final pct = total == 0 ? 0 : (e.value / total) * 100;
+                final color = palette[i % palette.length];
+
+                return PieChartSectionData(
+                  value: e.value,
+                  radius: 54,
+                  color: color,
+                  title: '${pct.toStringAsFixed(0)}%',
+                  titleStyle: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: ThemeData.estimateBrightnessForColor(color) ==
+                        Brightness.dark
+                        ? Colors.white
+                        : Colors.black87,
+                  ),
+                );
+              }),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 12,
+          runSpacing: 6,
+          alignment: WrapAlignment.center,
+          children: List.generate(entries.length, (i) {
+            final e = entries[i];
+            final color = palette[i % palette.length];
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '${e.key}: ${NumberFormat.simpleCurrency(decimalDigits: 0).format(e.value)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            );
+          }),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------- Dialog & Model ----------
 class _BudgetFormResult {
   final int categoryId;
   final double limit;
   _BudgetFormResult(this.categoryId, this.limit);
 }
+
 class _BudgetDialog extends StatefulWidget {
   final int year;
   final int month;
@@ -298,7 +455,7 @@ class _BudgetDialogState extends State<_BudgetDialog> {
   @override
   void initState() {
     super.initState();
-    _catId = widget.initialCategoryId ?? widget.categories.firstOrNull?.id;
+    _catId = widget.initialCategoryId ?? widget.categories.first.id;
     if (widget.initial != null) {
       _limitCtrl.text = widget.initial!.toStringAsFixed(2);
     }
@@ -357,6 +514,8 @@ class _BudgetDialogState extends State<_BudgetDialog> {
     );
   }
 }
+
+// ---------- Month Picker ----------
 class _MonthPickerDialog extends StatefulWidget {
   final int year;
   final int month;
@@ -398,7 +557,8 @@ class _MonthPickerDialogState extends State<_MonthPickerDialog> {
           ),
           Expanded(
             child: Center(
-              child: Text('$_year-${_month.toString().padLeft(2, '0')}', style: const TextStyle(fontSize: 18)),
+              child: Text('$_year-${_month.toString().padLeft(2, '0')}',
+                  style: const TextStyle(fontSize: 18)),
             ),
           ),
           IconButton(
@@ -423,4 +583,3 @@ class _MonthPickerDialogState extends State<_MonthPickerDialog> {
     );
   }
 }
-

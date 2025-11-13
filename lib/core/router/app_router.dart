@@ -14,6 +14,7 @@ import 'package:tesis/presentation/categories/categories_screen.dart';
 import 'package:tesis/presentation/budgets/budgets_screen.dart';
 import 'package:tesis/presentation/analytics/analytics_screen.dart';
 
+import '../../presentation/transactions/edit_transaction_screen.dart';
 import '../../presentation/widgets/app_bottom_nav.dart';
 
 class GoRouterRefreshStream extends ChangeNotifier {
@@ -79,6 +80,21 @@ GoRouter createRouter() {
             name: 'analytics',
             builder: (_, __) => const AnalyticsScreen(),
           ),
+          GoRoute(
+            name: 'edit_transaction',
+            path: '/tx/:id/edit',
+            builder: (context, state) {
+              final idStr = state.pathParameters['id'];
+              final id = int.tryParse(idStr ?? '');
+              if (id == null) {
+                return const Scaffold(
+                  body: Center(child: Text('ID de transacción inválido')),
+                );
+              }
+              return EditTransactionScreen(transactionId: id);
+            },
+          ),
+
         ],
       ),
 

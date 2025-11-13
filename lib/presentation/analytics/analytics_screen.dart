@@ -1,242 +1,416 @@
+// lib/presentation/analytics/analytics_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:drift/drift.dart' show Value;
+import 'package:fl_chart/fl_chart.dart';
 
-import '../../core/state/filters.dart';
-import '../../core/state/last_sync_provider.dart';
-import '../../core/state/sync_autorun.dart';
 import '../../core/state/db_providers.dart';
-import '../../data/db/app_database.dart';
-import '../../data/sync/sync_service.dart';
+import '../../core/state/filters.dart';
 import '../../core/utils/format.dart';
+import '../../core/state/analytics_providers.dart';
+import '../../data/db/app_database.dart';
 
-// Widgets
-import '../widgets/last_sync_chip.dart';
-import '../widgets/next_month_prediction_card.dart';
-import '../widgets/monthly_expense_chart.dart';
 
 class AnalyticsScreen extends ConsumerWidget {
   const AnalyticsScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Mantén el autosync activo también aquí
-    ref.watch(autoSyncProvider);
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
 
-    final selectedMonth = ref.watch(selectedMonthProvider);
+    final summary = ref.watch(monthlySummaryProvider);
+    final series = ref.watch(monthlyExpenseSeriesProvider);
+    final predictions = ref.watch(nextMonthExpenseEstimatesProvider);
+    final alerts = ref.watch(budgetAlertsProvider);
+    final selectedCategory = ref.watch(selectedCategoryFilterProvider);
+    final db = ref.watch(databaseProvider);
+
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Análisis'),
-        actions: [
-          IconButton(
-            tooltip: 'Cambiar mes',
-            icon: const Icon(Icons.calendar_month),
-            onPressed: () => _showMonthPicker(context, ref, selectedMonth),
-          ),
-          _buildOverflowMenu(context, ref),
-        ],
-      ),
-
-      // ⛔️ No incluir bottomNavigationBar aquí. Ya lo provee ShellRoute
-
+      appBar: AppBar(title: const Text('Análisis financiero')),
       body: RefreshIndicator(
         onRefresh: () async {
-          await ref.read(syncServiceProvider).syncOnce();
+          ref.invalidate(monthlySummaryProvider);
+          ref.invalidate(monthlyExpenseSeriesProvider);
+          ref.invalidate(nextMonthExpenseEstimatesProvider);
+          ref.invalidate(budgetAlertsProvider);
         },
         child: ListView(
+          padding: const EdgeInsets.all(16),
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: ref.watch(lastSyncAtProvider).when(
-                data: (lastSync) {
-                  final time = (lastSync == null || lastSync <= 0)
-                      ? null
-                      : DateTime.fromMillisecondsSinceEpoch(lastSync);
-                  return LastSyncChip(time: time);
-                },
-                loading: () => const SizedBox.shrink(),
-                error: (_, __) => const SizedBox.shrink(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            const NextMonthPredictionCard(),
-            const SizedBox(height: 8),
-            Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.only(
-                  left: 8, right: 8, top: 12, bottom: 8,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Gasto mensual (últimos 6)',
-                      style: Theme.of(context).textTheme.titleSmall,
+            // 1️⃣ Resumen mensual
+            summary.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Text('Error: $e'),
+              data: (data) {
+                return Card(
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  elevation: 0.3,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      children: [
+                        Text(
+                          'Resumen del mes',
+                          style: theme.textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          children: [
+                            _summaryItem('Ingresos', data.income,
+                                Icons.trending_up, scheme.primary),
+                            _summaryItem('Gastos', data.expense,
+                                Icons.trending_down, scheme.error),
+                            _summaryItem('Balance', data.balance,
+                                Icons.account_balance_wallet,
+                                data.balance >= 0
+                                    ? scheme.primary
+                                    : scheme.error),
+                          ],
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 8),
-                    const MonthlyExpenseChart(),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Mes base: ${_monthLabel(selectedMonth)}',
-                      style: Theme.of(context)
-                          .textTheme
-                          .bodySmall
-                          ?.copyWith(color: Colors.black54),
+                  ),
+                );
+              },
+            ),
+
+            const SizedBox(height: 16),
+            // 2️⃣ Filtro por categoría
+            _CategoryFilterRow(selectedCategory: selectedCategory),
+
+            const SizedBox(height: 16),
+
+            // 2️⃣ Alertas de presupuesto
+            alerts.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Text('Error: $e'),
+              data: (items) {
+                if (items.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                return Card(
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  elevation: 0.3,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('⚠️ Categorías en riesgo de sobrepasar presupuesto',
+                            style: theme.textTheme.titleMedium),
+                        const SizedBox(height: 8),
+                        ...items.map((a) {
+                          final diff = a.estimate - a.limit;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(a.categoryName),
+                                Text(
+                                  '+${Fx.money(diff)}',
+                                  style: TextStyle(
+                                    color: scheme.error,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+
+            const SizedBox(height: 16),
+
+
+            // 3️⃣ Gráfico de tendencia mensual
+            Card(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              elevation: 0.3,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    Text('Tendencia de gastos (últimos 6 meses)',
+                        style: theme.textTheme.titleMedium),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 220,
+                      child: series.when(
+                        loading: () =>
+                        const Center(child: CircularProgressIndicator()),
+                        error: (e, _) => Center(child: Text('Error: $e')),
+                        data: (points) {
+                          double? selectedX;
+                          return StatefulBuilder(
+                            builder: (context, setState) {
+                              return LineChart(
+                                LineChartData(
+                                  lineTouchData: LineTouchData(
+                                    handleBuiltInTouches: true,
+                                    touchCallback: (event, response) {
+                                      if (!event.isInterestedForInteractions ||
+                                          response?.lineBarSpots == null) {
+                                        setState(() => selectedX = null);
+                                        return;
+                                      }
+                                      final spot =
+                                          response!.lineBarSpots!.first;
+                                      setState(() => selectedX = spot.x);
+                                    },
+                                    touchTooltipData: LineTouchTooltipData(
+                                      tooltipBorderRadius: BorderRadius.circular(8),
+                                    tooltipPadding: const EdgeInsets.all(8),
+                                    tooltipMargin: 12,
+                                    getTooltipItems: (touchedSpots) {
+                                      return touchedSpots.map((spot) {
+                                        final idx = spot.x.toInt();
+                                        return LineTooltipItem(
+                                          '${points[idx].label}\n${Fx.money(points[idx].total)}',
+                                          const TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.white,
+                                          ),
+                                        );
+                                      }).toList();
+                                    },
+                                  ),
+
+                                  ),
+                                  gridData: FlGridData(show: false),
+                                  borderData: FlBorderData(show: false),
+                                  titlesData: FlTitlesData(
+                                    bottomTitles: AxisTitles(
+                                      sideTitles: SideTitles(
+                                        showTitles: true,
+                                        reservedSize: 24,
+                                        getTitlesWidget: (value, _) {
+                                          final i = value.toInt();
+                                          if (i < 0 || i >= points.length) {
+                                            return const SizedBox();
+                                          }
+                                          return Padding(
+                                            padding:
+                                            const EdgeInsets.only(top: 6),
+                                            child: Text(
+                                              points[i]
+                                                  .label
+                                                  .substring(5), // mes
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: selectedX == i
+                                                    ? scheme.primary
+                                                    : scheme
+                                                    .onSurfaceVariant,
+                                                fontWeight: selectedX == i
+                                                    ? FontWeight.bold
+                                                    : FontWeight.normal,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                    leftTitles: AxisTitles(
+                                      sideTitles:
+                                      SideTitles(showTitles: false),
+                                    ),
+                                    topTitles: AxisTitles(),
+                                    rightTitles: AxisTitles(),
+                                  ),
+                                  lineBarsData: [
+                                    LineChartBarData(
+                                      isCurved: true,
+                                      color: scheme.primary,
+                                      barWidth: 3,
+                                      belowBarData: BarAreaData(
+                                        show: true,
+                                        color:
+                                        scheme.primary.withOpacity(0.1),
+                                      ),
+                                      dotData: FlDotData(
+                                        show: true,
+                                        getDotPainter:
+                                            (spot, percent, bar, index) {
+                                          final isSelected =
+                                              selectedX == spot.x;
+                                          return FlDotCirclePainter(
+                                            radius: isSelected ? 6 : 4,
+                                            color: isSelected
+                                                ? scheme.primary
+                                                : scheme.primary
+                                                .withOpacity(0.4),
+                                            strokeWidth:
+                                            isSelected ? 2 : 1,
+                                            strokeColor: isSelected
+                                                ? scheme.primary
+                                                : scheme.primary
+                                                .withOpacity(0.3),
+                                          );
+                                        },
+                                      ),
+                                      spots: [
+                                        for (int i = 0;
+                                        i < points.length;
+                                        i++)
+                                          FlSpot(i.toDouble(),
+                                              points[i].total),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      ),
                     ),
                   ],
                 ),
               ),
             ),
+
+            const SizedBox(height: 16),
+
+            // 4️⃣ Predicción por categoría
+            predictions.when(
+              loading: () =>
+              const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('Error: $e')),
+              data: (items) {
+                if (items.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                return Card(
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  elevation: 0.3,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Estimación de gastos (próximo mes)',
+                            style: theme.textTheme.titleMedium),
+                        const SizedBox(height: 12),
+                        ...items.map((e) {
+                          final category = e.$1;
+                          final amount = e.$2;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    category,
+                                    style: theme.textTheme.bodyMedium,
+                                  ),
+                                ),
+                                Text(
+                                  Fx.money(amount),
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: amount < 0
+                                        ? const Color(0xFFAB2D25) // rojo FinTrack EC
+                                        : theme.textTheme.bodyMedium?.color,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
           ],
         ),
       ),
-
-      // 👇 Botón para insertar dummy tx
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _insertDummyTransaction(ref),
-        icon: const Icon(Icons.bug_report),
-        label: const Text('Dummy TX'),
-      ),
     );
   }
 
-  /// 🔁 Inserta una transacción dummy
-  Future<void> _insertDummyTransaction(WidgetRef ref) async {
-    final db = ref.read(databaseProvider);
-    final cat = await (db.select(db.categories)..limit(1)).getSingleOrNull();
-
-    if (cat == null) {
-      debugPrint('[DummyTx] ❌ No hay categorías disponibles');
-      return;
-    }
-
-    final tx = TransactionsCompanion(
-      categoryId: Value(cat.id),
-      amount: Value(10.0),
-      date: Value(DateTime.now()),
-      // Si la columna “description” no existe, omítela:
-      // description: Value('Dummy Transaction'),
-    );
-
-
-    await db.into(db.transactions).insert(tx);
-    debugPrint('[DummyTx] ✅ Transacción insertada');
-  }
-
-  PopupMenuButton<String> _buildOverflowMenu(BuildContext context, WidgetRef ref) {
-    return PopupMenuButton<String>(
-      onSelected: (key) async {
-        if (key == 'sync_now') {
-          await ref.read(syncServiceProvider).syncOnce();
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Sincronizado ✔️')),
-            );
-          }
-        } else if (key == 'debug') {
-          context.pushNamed('debug');
-        } else if (key == 'logout') {
-          await FirebaseAuth.instance.signOut();
-          if (context.mounted) context.go('/login');
-        }
-      },
-      itemBuilder: (ctx) => <PopupMenuEntry<String>>[
-        const PopupMenuItem(value: 'sync_now', child: Text('Sincronizar ahora')),
-        if (kDebugMode) const PopupMenuItem(value: 'debug', child: Text('Debug Tools')),
-        const PopupMenuDivider(),
-        const PopupMenuItem(value: 'logout', child: Text('Cerrar sesión')),
+  Widget _summaryItem(
+      String label, double value, IconData icon, Color color) {
+    return Column(
+      children: [
+        Icon(icon, color: color),
+        const SizedBox(height: 4),
+        Text(Fx.money(value),
+            style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: color,
+                fontSize: 16)),
+        Text(label,
+            style: const TextStyle(fontSize: 12, color: Colors.black54)),
       ],
     );
   }
-
-  Future<void> _showMonthPicker(
-      BuildContext context, WidgetRef ref, DateTime selectedMonth) async {
-    final picked = await showDialog<DateTime>(
-      context: context,
-      builder: (_) => _MonthPickerDialog(initial: selectedMonth),
-    );
-    if (picked != null && context.mounted) {
-      ref.read(selectedMonthProvider.notifier).state =
-          DateTime(picked.year, picked.month);
-    }
-  }
-
-  String _monthLabel(DateTime d) =>
-      '${d.year}-${d.month.toString().padLeft(2, '0')}';
-}
-
-class _MonthPickerDialog extends StatefulWidget {
-  final DateTime initial;
-  const _MonthPickerDialog({required this.initial});
+}class _CategoryFilterRow extends ConsumerWidget {
+  final int? selectedCategory;
+  const _CategoryFilterRow({this.selectedCategory});
 
   @override
-  State<_MonthPickerDialog> createState() => _MonthPickerDialogState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final db = ref.watch(databaseProvider);
 
-class _MonthPickerDialogState extends State<_MonthPickerDialog> {
-  late int _year;
-  late int _month;
-
-  @override
-  void initState() {
-    super.initState();
-    _year = widget.initial.year;
-    _month = widget.initial.month;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Seleccionar mes'),
-      content: Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.chevron_left),
-            onPressed: () {
-              setState(() {
-                if (_month == 1) {
-                  _month = 12;
-                  _year--;
-                } else {
-                  _month--;
-                }
-              });
-            },
-          ),
-          Expanded(
-            child: Center(
-              child: Text(
-                '$_year-${_month.toString().padLeft(2, '0')}',
-                style: const TextStyle(fontSize: 18),
-              ),
+    return FutureBuilder<List<Category>>(
+      future: db.select(db.categories).get(),
+      builder: (context, snapshot) {
+        final cats = snapshot.data ?? [];
+        return Card(
+          color: scheme.surfaceContainerLow,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16)),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Filtrar por categoría',
+                    style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    ChoiceChip(
+                      label: const Text('Todas'),
+                      selected: selectedCategory == null,
+                      onSelected: (_) => ref
+                          .read(selectedCategoryFilterProvider.notifier)
+                          .state = null,
+                    ),
+                    for (final cat in cats)
+                      ChoiceChip(
+                        label: Text(cat.name),
+                        selected: selectedCategory == cat.id,
+                        onSelected: (_) => ref
+                            .read(selectedCategoryFilterProvider.notifier)
+                            .state = cat.id,
+                      ),
+                  ],
+                ),
+              ],
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.chevron_right),
-            onPressed: () {
-              setState(() {
-                if (_month == 12) {
-                  _month = 1;
-                  _year++;
-                } else {
-                  _month++;
-                }
-              });
-            },
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
-        ElevatedButton(onPressed: () => Navigator.pop(context, DateTime(_year, _month)), child: const Text('Aceptar')),
-      ],
+        );
+      },
     );
   }
 }
+
